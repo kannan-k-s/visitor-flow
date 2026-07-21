@@ -1,0 +1,19 @@
+{
+  "name": "admin-ui-e2e",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Browser-based Playwright end-to-end tests for the admin SPA, driven through nginx on port 80.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "dotenv": "^16.4.5",
+    "jose": "^5.9.6",
+    "mysql2": "^3.11.5"
+  }
+}

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Analytics · Experiment Admin</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Experiment Admin <small data-tenant-label></small></div>
+    <nav class="nav">
+      <a data-nav-experiments>Experiments</a>
+      <a data-nav-analytics class="active">Analytics</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <h1 class="page-title">Analytics</h1>
+    <div class="banner error" data-banner role="alert"></div>
+
+    <section class="card">
+      <div class="field-inline">
+        <div class="field" style="margin-bottom:0">
+          <label for="exp-select">Experiment</label>
+          <select id="exp-select" data-experiment-select></select>
+        </div>
+        <button class="secondary" data-refresh type="button">Refresh</button>
+      </div>
+    </section>
+
+    <section class="card" data-results-card hidden>
+      <h2 data-results-title>Results</h2>
+      <div class="row" style="margin-bottom:16px">
+        <div><div class="muted">Experiment ID</div><div class="mono" data-stat-id>—</div></div>
+        <div style="margin-left:24px"><div class="muted">Orphan conversions</div>
+          <div class="mono" data-stat-orphan>—</div></div>
+      </div>
+      <div data-results-table><div class="empty">Loading…</div></div>
+      <p class="hint" style="margin-top:14px">
+        Results are eventually consistent — exposures and conversions arrive asynchronously
+        through the tracking pipeline. Orphan conversions are conversions with no recorded exposure.
+      </p>
+    </section>
+
+    <section class="card" data-empty-state hidden>
+      <div class="empty">No experiments to analyze yet. Create one on the Experiments page.</div>
+    </section>
+  </main>
+
+  <script src="/assets/api.js"></script>
+  <script src="/assets/analytics.js"></script>
+</body>
+</html>

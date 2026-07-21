@@ -48,7 +48,7 @@ class OAuthLoginSuccessHandlerImpl implements OAuthLoginSuccessHandler {
     if (request.getSession(false) != null) {
       request.getSession(false).invalidate();
     }
-    response.sendRedirect("/swagger-ui.html");
+    response.sendRedirect("/" + tenantName + "/experiments");
   }
 
   private void addCookie(HttpServletResponse response, String name, String value, Duration maxAge) {
