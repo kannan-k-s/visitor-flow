@@ -1,0 +1,23 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Java: 2-space indent, K&R braces (see AGENTS.md §5)
+[*.java]
+indent_style = space
+indent_size = 2
+max_line_length = 120
+
+# Preserve the Maven-generated pom's existing tab style to avoid churn
+[*.xml]
+indent_style = tab
+
+# Markdown: keep trailing whitespace (hard line breaks)
+[*.md]
+trim_trailing_whitespace = false
