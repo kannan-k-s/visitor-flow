@@ -64,6 +64,4 @@ public interface EventRepository extends JpaRepository<EventEntity, Long> {
   long countOrphanConversions(
     @Param("experimentId") Long experimentId, @Param("tenantId") Long tenantId
   );
-
-  boolean existsByExperimentIdAndTenantId(Long experimentId, Long tenantId);
 }

@@ -17,9 +17,7 @@ public interface ExperimentMapper {
   void update(UpdateExperimentRequest request, ExperimentEntity experiment);
   VariantEntity toVariant(VariantRequest request, Long experimentId);
   void update(VariantRequest request, VariantEntity variant);
-  ExperimentResponse toResponse(
-    ExperimentEntity experiment, List<VariantEntity> variants, String analyticsWarning
-  );
+  ExperimentResponse toResponse(ExperimentEntity experiment, List<VariantEntity> variants);
   PagedResponse<ExperimentSummaryResponse> toPage(Page<ExperimentEntity> experiments);
   DeleteExperimentResponse toDeleteResponse(Long experimentId);
 }

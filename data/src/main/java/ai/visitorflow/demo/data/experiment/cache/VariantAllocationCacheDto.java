@@ -16,6 +16,9 @@ public class VariantAllocationCacheDto {
   @JsonProperty("variant_id")
   private Long variantId;
 
+  @JsonProperty("content")
+  private String content;
+
   @JsonProperty("allocation_percentage")
   private BigDecimal allocationPercentage;
 

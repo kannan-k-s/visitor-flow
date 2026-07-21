@@ -146,11 +146,12 @@ class ExperimentApiE2ETest {
       experimentsPath(), json(experimentRequest(experimentName, "hash", 50, 50, false, null))
     ), 200);
     JsonNode created = body(create);
-    experimentId = created.get("id").asLong();
-    firstVariantId = created.get("variants").get(0).get("id").asLong();
-    secondVariantId = created.get("variants").get(1).get("id").asLong();
+    experimentId = stringLong(created.get("id"));
+    firstVariantId = stringLong(created.get("variants").get(0).get("id"));
+    secondVariantId = stringLong(created.get("variants").get(1).get("id"));
     assertThat(created.get("name").asString()).isEqualTo(experimentName);
-    assertThat(created.has("analytics_warning")).isFalse();
+    assertThat(stringDecimal(created.get("variants").get(0).get("alloc_pct")))
+      .isEqualByComparingTo(new BigDecimal("50"));
 
     assertError(authenticated.post(
       experimentsPath(), json(experimentRequest(experimentName, "hash", 50, 50, false, null))
@@ -162,22 +163,28 @@ class ExperimentApiE2ETest {
       experimentsPath(), json(experimentRequest(experimentName, "swrr", 50, 50, false, null))
     ), 400, "invalid_request");
     assertError(authenticated.post(
+      experimentsPath(), json(experimentRequest(experimentName, "unknown", 50, 50, false, null))
+    ), 400, "invalid_request");
+    assertError(authenticated.post(
       experimentsPath(), json(experimentRequest(experimentName, "hash", 50, 50, true, 123L))
     ), 400, "invalid_request");
 
     JsonNode fetched = body(assertStatus(authenticated.get(experimentPath()), 200));
-    assertThat(fetched.get("id").asLong()).isEqualTo(experimentId);
+    assertThat(stringLong(fetched.get("id"))).isEqualTo(experimentId);
     JsonNode page = body(assertStatus(authenticated.get(experimentsPath()), 200));
     assertThat(containsExperiment(page.get("items"), experimentId)).isTrue();
+    assertThat(stringInt(page.get("page"))).isZero();
+    assertThat(stringInt(page.get("size"))).isPositive();
+    assertThat(stringLong(page.get("total_elements"))).isPositive();
+    assertThat(stringInt(page.get("total_pages"))).isPositive();
     assertError(authenticated.get(experimentsPath() + "/9223372036854775807"), 404, "not_found");
 
     APIResponse update = assertStatus(authenticated.put(
       experimentPath(), json(updateRequest(60, 40, firstVariantId, secondVariantId))
     ), 200);
     JsonNode updated = body(update);
-    assertThat(updated.get("variants").get(0).get("id").asLong()).isEqualTo(firstVariantId);
-    assertThat(updated.get("variants").get(1).get("id").asLong()).isEqualTo(secondVariantId);
-    assertThat(updated.has("analytics_warning")).isFalse();
+    assertThat(stringLong(updated.get("variants").get(0).get("id"))).isEqualTo(firstVariantId);
+    assertThat(stringLong(updated.get("variants").get(1).get("id"))).isEqualTo(secondVariantId);
 
     assertError(authenticated.put(
       experimentPath(), json(updateRequest(50, 50, firstVariantId, Long.MAX_VALUE))
@@ -200,34 +207,41 @@ class ExperimentApiE2ETest {
     JsonNode unknown = body(assertStatus(anonymous.get(path + "?experiments=9223372036854775807"), 200));
     assertThat(unknown.get("degraded").asBoolean()).isTrue();
     assertThat(unknown.get("assignments").size()).isZero();
+    stringLong(unknown.get("anon_visitor_id"));
 
     JsonNode assigned = body(assertStatus(anonymous.get(path + "?experiments=" + experimentId), 200));
-    primaryAnonId = assigned.get("anon_visitor_id").asLong();
-    primaryVariantId = assigned.get("assignments").get(String.valueOf(experimentId)).asLong();
+    primaryAnonId = stringLong(assigned.get("anon_visitor_id"));
+    JsonNode assignedVariant = assigned.get("assignments").get(String.valueOf(experimentId));
+    primaryVariantId = stringLong(assignedVariant.get("id"));
+    assertThat(assignedVariant.get("content").asString()).isEqualTo(expectedContent(primaryVariantId));
     assertThat(assigned.get("degraded").asBoolean()).isFalse();
     expectedAssigned.merge(primaryVariantId, 1, Integer::sum);
 
     JsonNode repeated = body(assertStatus(anonymous.get(
       path + "?experiments=" + experimentId, headers("X-Anon-Id", String.valueOf(primaryAnonId))
     ), 200));
-    assertThat(repeated.get("anon_visitor_id").asLong()).isEqualTo(primaryAnonId);
-    assertThat(repeated.get("assignments").get(String.valueOf(experimentId)).asLong())
-      .isEqualTo(primaryVariantId);
+    assertThat(stringLong(repeated.get("anon_visitor_id"))).isEqualTo(primaryAnonId);
+    JsonNode repeatedVariant = repeated.get("assignments").get(String.valueOf(experimentId));
+    assertThat(stringLong(repeatedVariant.get("id"))).isEqualTo(primaryVariantId);
+    assertThat(repeatedVariant.get("content").asString()).isEqualTo(expectedContent(primaryVariantId));
 
     JsonNode linked = body(assertStatus(anonymous.get(
       path + "?experiments=" + experimentId, headers("X-Visitor-Id", visitorId)
     ), 200));
-    linkedAnonId = linked.get("anon_visitor_id").asLong();
-    linkedVariantId = linked.get("assignments").get(String.valueOf(experimentId)).asLong();
+    linkedAnonId = stringLong(linked.get("anon_visitor_id"));
+    JsonNode linkedVariant = linked.get("assignments").get(String.valueOf(experimentId));
+    linkedVariantId = stringLong(linkedVariant.get("id"));
+    assertThat(linkedVariant.get("content").asString()).isEqualTo(expectedContent(linkedVariantId));
     assertThat(linkedAnonId).isNotEqualTo(primaryAnonId);
     expectedAssigned.merge(linkedVariantId, 1, Integer::sum);
 
     JsonNode linkedAgain = body(assertStatus(anonymous.get(
       path + "?experiments=" + experimentId, headers("X-Visitor-Id", visitorId)
     ), 200));
-    assertThat(linkedAgain.get("anon_visitor_id").asLong()).isEqualTo(linkedAnonId);
-    assertThat(linkedAgain.get("assignments").get(String.valueOf(experimentId)).asLong())
-      .isEqualTo(linkedVariantId);
+    assertThat(stringLong(linkedAgain.get("anon_visitor_id"))).isEqualTo(linkedAnonId);
+    assertThat(stringLong(linkedAgain.get("assignments").get(
+      String.valueOf(experimentId)
+    ).get("id"))).isEqualTo(linkedVariantId);
   }
 
   @Test
@@ -236,14 +250,17 @@ class ExperimentApiE2ETest {
     String path = "/" + TENANT + "/v1/track";
     Map<String, Object> exposed = trackingRequest("exposed", Map.of(experimentId, primaryVariantId));
     JsonNode noIdentity = body(assertStatus(anonymous.post(path, json(exposed)), 200));
-    assertThat(noIdentity.get("accepted").asInt()).isZero();
+    assertThat(stringInt(noIdentity.get("accepted"))).isZero();
     JsonNode unknownVisitor = body(assertStatus(anonymous.post(
       path, json(exposed).setHeader("X-Visitor-Id", "unknown-" + UUID.randomUUID())
     ), 200));
-    assertThat(unknownVisitor.get("accepted").asInt()).isZero();
+    assertThat(stringInt(unknownVisitor.get("accepted"))).isZero();
 
     assertError(anonymous.post(
       path, json(trackingRequest("assigned", Map.of(experimentId, primaryVariantId)))
+    ), 400, "invalid_request");
+    assertError(anonymous.post(
+      path, json(trackingRequest("unknown", Map.of(experimentId, primaryVariantId)))
     ), 400, "invalid_request");
     assertError(anonymous.post(
       path, json(trackingRequest("exposed", Map.of()))
@@ -298,7 +315,7 @@ class ExperimentApiE2ETest {
     JsonNode results = awaitResults();
     int exposed = 0;
     for (JsonNode variant : results.get("variants")) {
-      exposed += variant.get("exposed").asInt();
+      exposed += stringInt(variant.get("exposed"));
     }
     assertThat(exposed).isEqualTo(expectedExposed.values().stream().mapToInt(Integer::intValue).sum());
   }
@@ -313,17 +330,17 @@ class ExperimentApiE2ETest {
 
     Thread.sleep(INITIAL_EVENT_DELAY.toMillis());
     JsonNode results = awaitResults();
-    assertThat(results.get("experiment_id").asLong()).isEqualTo(experimentId);
-    assertThat(results.get("orphan_converted").asLong()).isEqualTo(1);
+    assertThat(stringLong(results.get("experiment_id"))).isEqualTo(experimentId);
+    assertThat(stringLong(results.get("orphan_converted"))).isEqualTo(1);
     for (JsonNode variant : results.get("variants")) {
-      Long variantId = variant.get("variant_id").asLong();
+      Long variantId = stringLong(variant.get("variant_id"));
       int assigned = expectedAssigned.getOrDefault(variantId, 0);
       int exposed = expectedExposed.getOrDefault(variantId, 0);
       int converted = expectedConverted.getOrDefault(variantId, 0);
-      assertThat(variant.get("assigned").asInt()).isEqualTo(assigned);
-      assertThat(variant.get("exposed").asInt()).isEqualTo(exposed);
-      assertThat(variant.get("converted").asInt()).isEqualTo(converted);
-      assertThat(new BigDecimal(variant.get("conversion_rate").asString()))
+      assertThat(stringInt(variant.get("assigned"))).isEqualTo(assigned);
+      assertThat(stringInt(variant.get("exposed"))).isEqualTo(exposed);
+      assertThat(stringInt(variant.get("converted"))).isEqualTo(converted);
+      assertThat(stringDecimal(variant.get("conversion_rate")))
         .isEqualByComparingTo(rate(converted, exposed));
     }
   }
@@ -347,16 +364,16 @@ class ExperimentApiE2ETest {
 
   @Test
   @Order(8)
-  void coversPostTrafficWarningAndDeleteApi() {
+  void coversPostTrafficUpdateAndDeleteApi() {
     JsonNode updated = body(assertStatus(authenticated.put(
       experimentPath(), json(updateRequest(55, 45, firstVariantId, secondVariantId))
     ), 200));
-    assertThat(updated.get("variants").get(0).get("id").asLong()).isEqualTo(firstVariantId);
-    assertThat(updated.get("variants").get(1).get("id").asLong()).isEqualTo(secondVariantId);
-    assertThat(updated.get("analytics_warning").asString()).contains("may skew analytics");
+    assertThat(stringLong(updated.get("variants").get(0).get("id"))).isEqualTo(firstVariantId);
+    assertThat(stringLong(updated.get("variants").get(1).get("id"))).isEqualTo(secondVariantId);
+    assertThat(updated.has("analytics_warning")).isFalse();
 
     JsonNode deleted = body(assertStatus(authenticated.delete(experimentPath()), 200));
-    assertThat(deleted.get("experiment_id").asLong()).isEqualTo(experimentId);
+    assertThat(stringLong(deleted.get("experiment_id"))).isEqualTo(experimentId);
     assertThat(deleted.get("deleted").asBoolean()).isTrue();
     assertError(authenticated.get(experimentPath()), 404, "not_found");
     assertError(authenticated.get(experimentPath() + "/results"), 404, "not_found");
@@ -406,7 +423,7 @@ class ExperimentApiE2ETest {
   }
 
   private void assertAccepted(APIResponse response, int accepted) {
-    assertThat(body(assertStatus(response, 200)).get("accepted").asInt()).isEqualTo(accepted);
+    assertThat(stringInt(body(assertStatus(response, 200)).get("accepted"))).isEqualTo(accepted);
   }
 
   private JsonNode body(APIResponse response) {
@@ -476,7 +493,7 @@ class ExperimentApiE2ETest {
         int partition = Integer.parseInt(name.substring(PARTITION_QUEUE_PREFIX.length()));
         JsonNode stats = queue.get("message_stats");
         JsonNode published = stats == null ? null : stats.get("publish");
-        counts.put(partition, published == null ? 0L : published.asLong());
+        counts.put(partition, published == null ? 0L : published.longValue());
       }
     }
     assertThat(counts).hasSize(PARTITION_COUNT);
@@ -484,16 +501,16 @@ class ExperimentApiE2ETest {
   }
 
   private boolean matchesExpectedEvents(JsonNode results) {
-    if (results.get("orphan_converted").asLong() != 1) {
+    if (stringLong(results.get("orphan_converted")) != 1) {
       return false;
     }
     int assigned = 0;
     int exposed = 0;
     int converted = 0;
     for (JsonNode variant : results.get("variants")) {
-      assigned += variant.get("assigned").asInt();
-      exposed += variant.get("exposed").asInt();
-      converted += variant.get("converted").asInt();
+      assigned += stringInt(variant.get("assigned"));
+      exposed += stringInt(variant.get("exposed"));
+      converted += stringInt(variant.get("converted"));
     }
     return assigned == expectedAssigned.values().stream().mapToInt(Integer::intValue).sum()
       && exposed == expectedExposed.values().stream().mapToInt(Integer::intValue).sum()
@@ -562,11 +579,31 @@ class ExperimentApiE2ETest {
 
   private boolean containsExperiment(JsonNode items, Long id) {
     for (JsonNode item : items) {
-      if (item.get("id").asLong() == id) {
+      if (stringLong(item.get("id")) == id) {
         return true;
       }
     }
     return false;
+  }
+
+  private String expectedContent(Long variantId) {
+    return variantId.equals(firstVariantId) ? "control-updated" : "treatment-updated";
+  }
+
+  private long stringLong(JsonNode value) {
+    assertThat(value).isNotNull();
+    assertThat(value.isString()).as(value.toString()).isTrue();
+    return Long.parseLong(value.asString());
+  }
+
+  private int stringInt(JsonNode value) {
+    return Math.toIntExact(stringLong(value));
+  }
+
+  private BigDecimal stringDecimal(JsonNode value) {
+    assertThat(value).isNotNull();
+    assertThat(value.isString()).as(value.toString()).isTrue();
+    return new BigDecimal(value.asString());
   }
 
   private BigDecimal rate(int converted, int exposed) {

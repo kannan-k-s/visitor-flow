@@ -21,6 +21,9 @@ class TrackingServiceImpl implements TrackingService {
 
   @Override
   public TrackResponse track(TrackRequest request) {
+    if (!request.getStatus().isClientReportable()) {
+      throw new ValidationException("Only exposed and converted tracking statuses are accepted");
+    }
     if (request.getData().size() > trackingProperties.maxEntries()) {
       throw new ValidationException("At most " + trackingProperties.maxEntries() + " tracking entries are allowed");
     }

@@ -4,21 +4,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import ai.visitorflow.demo.data.experiment.cache.ExperimentConfigCacheDto;
 import ai.visitorflow.demo.data.experiment.cache.VariantAllocationCacheDto;
+import ai.visitorflow.demo.data.experiment.model.AssignmentStrategy;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-class HashAssignmentStrategyImplTest {
-  private final HashAssignmentStrategyImpl strategy = new HashAssignmentStrategyImpl();
+class HashAssignmentEngineImplTest {
+  private final HashAssignmentEngineImpl engine = new HashAssignmentEngineImpl();
 
   @Test
   void returnsSameVariantForSameAnonAndExperiment() {
     ExperimentConfigCacheDto experiment = experiment(50, 50);
 
-    Long first = strategy.assign(918273L, experiment);
+    VariantAllocationCacheDto first = engine.assign(918273L, experiment);
 
-    assertThat(strategy.assign(918273L, experiment)).isEqualTo(first);
-    assertThat(strategy.assign(918273L, experiment)).isEqualTo(first);
+    assertThat(engine.assign(918273L, experiment).getVariantId()).isEqualTo(first.getVariantId());
+    assertThat(engine.assign(918273L, experiment).getContent()).isEqualTo(first.getContent());
   }
 
   @Test
@@ -28,7 +29,7 @@ class HashAssignmentStrategyImplTest {
     int population = 100_000;
 
     for (long anonId = 1; anonId <= population; anonId++) {
-      if (strategy.assign(anonId, experiment).equals(102L)) {
+      if (engine.assign(anonId, experiment).getVariantId().equals(102L)) {
         secondVariant++;
       }
     }
@@ -41,7 +42,7 @@ class HashAssignmentStrategyImplTest {
     int boundary = firstPercentage * 100;
     return ExperimentConfigCacheDto.builder()
       .experimentId(77L)
-      .strategy("hash")
+      .strategy(AssignmentStrategy.HASH)
       .defaultVariantId(101L)
       .variants(List.of(
         allocation(101L, firstPercentage, 0, boundary - 1),
@@ -53,6 +54,7 @@ class HashAssignmentStrategyImplTest {
   private VariantAllocationCacheDto allocation(Long id, int percentage, int lower, int upper) {
     return VariantAllocationCacheDto.builder()
       .variantId(id)
+      .content("variant-" + id)
       .allocationPercentage(BigDecimal.valueOf(percentage))
       .lowerBucket(lower)
       .upperBucket(upper)

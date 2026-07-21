@@ -39,7 +39,7 @@ The normal build needs no running infrastructure and excludes `*E2ETest.java`.
 ./mvnw clean verify
 ```
 
-Expected result: **13 tests**, zero failures and errors.
+Expected result: **16 tests**, zero failures and errors.
 
 ## Playwright HTTP E2E tests
 
@@ -86,12 +86,12 @@ set +a
 ./mvnw -pl web -am verify -Pe2e
 ```
 
-Expected result: **13 unit tests + 8 E2E scenarios = 21 tests**, zero failures and errors.
+Expected result: **16 unit tests + 8 E2E scenarios = 24 tests**, zero failures and errors.
 
 The E2E suite covers:
 
 - health, unauthenticated access, tenant isolation, unknown tenants, and OAuth state redirect
-- experiment create, list, read, update, delete, validation, ID preservation, and analytics warning
+- experiment create, list, read, update, delete, validation, and ID preservation
 - assignment identity generation/linking, deterministic repeat assignment, limits, invalid input, and degradation
 - tracking validation, missing/unknown identity no-op behavior, idempotency, exposure, conversion, and orphan conversion
 - delayed RabbitMQ ingestion into the event table and aggregate results/rates

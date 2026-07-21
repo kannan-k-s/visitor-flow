@@ -1,9 +1,9 @@
 package ai.visitorflow.demo.visitor.tracking.dto.request;
 
+import ai.visitorflow.demo.data.event.model.EventStatus;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.util.Map;
@@ -17,8 +17,7 @@ import lombok.extern.jackson.Jacksonized;
 public class TrackRequest {
   @JsonProperty("status")
   @NotNull
-  @Pattern(regexp = "exposed|converted")
-  private String status;
+  private EventStatus status;
 
   @JsonProperty("data")
   @NotEmpty

@@ -3,16 +3,21 @@ package ai.visitorflow.demo.web.security;
 import ai.visitorflow.demo.web.error.HttpErrorWriter;
 import ai.visitorflow.demo.web.filter.RequestContextFilter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import java.util.List;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Configuration
@@ -26,6 +31,7 @@ class SecurityConfig {
     HttpErrorWriter errorWriter
   ) throws Exception {
     http
+      .cors(Customizer.withDefaults())
       .csrf(AbstractHttpConfigurer::disable)
       .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
       .authorizeHttpRequests(authorize -> authorize
@@ -48,6 +54,20 @@ class SecurityConfig {
       .addFilterAfter(contextFilter, JwtCookieAuthenticationFilter.class)
       .addFilterBefore(tenantLoginFilter, OAuth2AuthorizationRequestRedirectFilter.class);
     return http.build();
+  }
+
+  @Bean
+  CorsConfigurationSource corsConfigurationSource() {
+    CorsConfiguration dataPlane = new CorsConfiguration();
+    dataPlane.setAllowedOrigins(List.of("*"));          // anonymous, header-based identity — no credentials
+    dataPlane.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));
+    dataPlane.setAllowedHeaders(List.of("*"));
+    dataPlane.setAllowCredentials(false);
+    dataPlane.setMaxAge(3600L);
+    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    source.registerCorsConfiguration("/*/v1/assign", dataPlane);
+    source.registerCorsConfiguration("/*/v1/track", dataPlane);
+    return source;
   }
 
   @Bean

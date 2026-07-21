@@ -96,10 +96,11 @@ Assembled into **one deployable now**; the module split follows the plane bounda
 
 ## 6. Assignment Engine (core)
 
-One interface, two strategies, shared identity + fallback:
+One enum, strategy engines, shared identity + fallback:
 
 ```
-interface AssignmentStrategy { assign(identity, experiment) -> variant }
+enum AssignmentStrategy { HASH, SWRR }
+interface AssignmentEngine { strategy() -> AssignmentStrategy; assign(identity, experiment) -> variant }
 ```
 
 ### 6.1 Identity — two visitor ids
@@ -313,7 +314,8 @@ Per experiment, per variant: **assigned, exposed, converted, and conversion rate
 **Data plane** (anonymous, tenant in path, rate-limited):
 ```
 GET  /{tenant}/v1/assign?experiments=exp1,exp2  (≤20)   headers: X-Anon-Id? · X-Visitor-Id?
-     → { assignments: { exp1: "a", exp2: "b" }, anon_visitor_id, degraded }   // emits `assigned` server-side
+     → { assignments: { exp1: { id: "1", content: "..." } },
+         anon_visitor_id: "123", degraded }   // emits `assigned` server-side
 POST /{tenant}/v1/track   headers: X-Anon-Id? · X-Visitor-Id?
      body: { status: "exposed"|"converted", data: { exp1: "a", exp2: "b" } }
      // one status, batched over experiments; client echoes the shown variant; `assigned` is server-only

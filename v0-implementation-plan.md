@@ -31,7 +31,9 @@ the cache (a derived `defaultVariantId` is fine). · 6. Spring Cache `@Cacheable
 resolution; the hot **config cache = per-tenant Redis hash** (`HMGET` batch, `DEL`-whole-key on
 write). · 7. **channel-level views** `*Entity` / `*Request`+`*Response` / `*CacheDto` / `*MqDto`. ·
 9. every table has an auto-inc `id` PK (dedup tuple = **unique key**). · 10. `/assign` takes
-`List<Long>`. · 11/12. **ids on the wire** — `Map<Long,Long>` (expId→varId). · 13. unknown tenant →
+`List<Long>`. · 11/12. **ids on the wire** — assign returns
+`Map<Long, {id, content}>` (expId→variant); track accepts `Map<Long,Long>` (expId→varId); all
+response numerics are serialized as strings. · 13. unknown tenant →
 **404 both planes**. · 14. **tenant resolver in `data`**. · 15. seed **tenants + users**.
 
 ## Context
@@ -100,12 +102,14 @@ tenant/user CRUD & invites (**seeded**).
 
 ## Wire contract (#10/#11/#12) — ids on the wire
 
-Experiments/variants by **numeric id**; identity via the two optional headers.
+Experiments/variants use numeric ids internally and in requests; response numerics are JSON strings.
+Identity arrives through the two optional headers.
 
 ```
 GET  /{tenant}/v1/assign?experiments=1,2,3    headers: X-Anon-Id?  X-Visitor-Id?   (both optional)
-  200 { "assignments": { "1": 44, "2": 91 }, "anon_visitor_id": 78321, "degraded": false }
-       // { experimentId : variantId } ; anon_visitor_id always returned for the client to store & replay
+  200 { "assignments": { "1": { "id": "44", "content": "..." } },
+        "anon_visitor_id": "78321", "degraded": false }
+       // response numerics are strings for JavaScript safety; the client stores/replays anon_visitor_id
 
 POST /{tenant}/v1/track                        headers: X-Anon-Id?  X-Visitor-Id?   (lookup-only; miss → orphan)
   body { "status": "exposed"|"converted", "data": { "1": 44, "2": 91 } }   // { expId : varId }
@@ -217,8 +221,8 @@ takes `tenantId` (R9) — sole exception `TenantRepository.findByName`.
     (single round trip, atomic group read — design §6.6/§6.8); nil fields lazily loaded from MySQL
     (experiment + variants → ModelMapper-built DTO, ranges via a `TypeMap`), `HSET` back, `EXPIRE`
     refreshed. Returns resolved configs; absent ids → assign treats as unknown → degraded.
-  - `void clear(Long tenantId)` — **`DEL cfg:{tenantId}`**, called on **any** experiment
-    create/update/delete: drop the whole tenant key, next assign lazily rebuilds only what it needs.
+  - `void clearAfterCommit()` — schedules **`DEL cfg:{tenantId}`** after the surrounding transaction
+    commits; called on **any** experiment create/update/delete. The next assign lazily rebuilds only what it needs.
     Deliberately simple — no per-field `HSET`/`HDEL`, no RENAME swap.
   - Cold-load single-flight (design §11) deferred — a first-touch herd is an accepted v0 risk.
 
@@ -257,11 +261,12 @@ backfill is idempotent Redis cache population, not durable state).
   **`anon_visitor_id`**; on strategy error → cache view's `defaultVariantId` + `degraded=true`;
   unknown experiment → omit + `degraded=true`; emit one `assigned` `TrackingEventMqDto`
   (anonVisitorId) per experiment (fire-and-forget). Returns DTO; never throws.
-- **`strategy/AssignmentStrategy`** (interface) + **`HashAssignmentStrategyImpl`** (pkg-protected) —
-  `String assign(long anonVisitorId, ExperimentConfigCacheDto cfg)`:
-  `bucket = murmur3_32(anonVisitorId + ":" + cfg.experimentId()) % 10000` → range lookup → **variantId**.
-- **`dto/response/AssignResponse`** (R3/R5) — `@JsonProperty("assignments")` `Map<Long,Long>`
-  (expId→varId), `@JsonProperty("anon_visitor_id")` `Long` (always returned), `@JsonProperty("degraded")`.
+- **`model/AssignmentStrategy`** enum (`HASH`, `SWRR`) — serialized and persisted as lowercase strings;
+  Java code never compares strategy string literals. **`strategy/AssignmentEngine`** +
+  **`HashAssignmentEngineImpl`** (pkg-protected) use
+  `bucket = murmur3_32(anonVisitorId + ":" + cfg.experimentId()) % 10000` → range lookup → variant.
+- **`dto/response/AssignResponse`** (R3/R5) — `assignments` maps each experiment id to
+  `{ "id": "<variant-id>", "content": "..." }`; `anon_visitor_id` is also serialized as a string.
 
 ### `tracking/`
 - **`controller/v1/TrackController`** (R1/R2) — `@PostMapping("/v1/track")`,
@@ -275,11 +280,12 @@ backfill is idempotent Redis cache population, not durable state).
   output binding. Sends are serial; a `/track` false/exception becomes `503`, while
   best-effort assigned-event failures are logged and swallowed. No `CompletableFuture` or unmanaged threads.
 - **`consumer/TrackingEventConsumer`** + **`Impl`** (R10/R4) — invoked by the functional `Consumer` binding;
-  maps `TrackingEventMqDto` → `EventEntity` (ModelMapper) → `EventRepository.insertIgnore` (append-only
-  dedup). Writes MySQL `events`.
+  writes the MQ DTO directly through `EventRepository.insertIgnore` (append-only dedup), avoiding a
+  throwaway entity allocation. Writes MySQL `events`.
 - **`mq/TrackingEventMqDto`** (broker view, #7) — `tenantId`, `experimentId`, `variantId`,
   `anonVisitorId` (Long), `status`, `ts`, `degraded`.
-- **`dto/request/TrackRequest`** (R3/R5) — `@JsonProperty("status")` (validated),
+- **`dto/request/TrackRequest`** (R3/R5) — `status` is the `EventStatus` enum; only `EXPOSED` and
+  `CONVERTED` are client-reportable (`ASSIGNED` is rejected by the service),
   `@JsonProperty("data")` `Map<Long,Long>` (expId→varId, #12). No ambient fields (R6).
 
 ---
@@ -293,8 +299,8 @@ backfill is idempotent Redis cache population, not durable state).
 - **`service/ExperimentService`** + **`ExperimentServiceImpl`** (R10/R4) — tenantId from context (R7)
   → repos (R9); **validate** `allocPct` sums to 100 and exactly one `isDefault` (design §9) →
   `ValidationException`; persist experiment + variants transactionally;
-  `ExperimentConfigCache.clear(tenantId)` on create/update/delete (drop the whole tenant hash — kept
-  simple). Returns DTOs only (R2).
+  `ExperimentConfigCache.clearAfterCommit()` on create/update/delete (drop the whole tenant hash only
+  after the database transaction commits — kept simple). Returns DTOs only (R2).
 - **`dto/request/CreateExperimentRequest`** (`name`, optional `strategy`, `variants:List<VariantRequest>`),
   **`UpdateExperimentRequest`**, **`VariantRequest`** (`content`, `alloc_pct`, `is_default`). `@Jacksonized`.
 - **`dto/response/ExperimentResponse`** (experiment + `List<VariantResponse>`),

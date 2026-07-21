@@ -7,7 +7,6 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -18,9 +17,7 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 @Entity
-@Table(name = "identity_links", uniqueConstraints = @UniqueConstraint(
-  name = "uk_identity_links_tenant_visitor", columnNames = {"tenant_id", "visitor_id"}
-))
+@Table(name = "identity_links")
 @EntityListeners(AuditingEntityListener.class)
 @Getter
 @Builder

@@ -29,6 +29,7 @@ class ExperimentConfigMapperImpl implements ExperimentConfigMapper, Initializing
         int upperBucket = lowerBucket + bucketCount - 1;
         allocations.add(VariantAllocationCacheDto.builder()
           .variantId(variant.getId())
+          .content(variant.getContent())
           .allocationPercentage(variant.getAllocationPercentage())
           .lowerBucket(lowerBucket)
           .upperBucket(upperBucket)

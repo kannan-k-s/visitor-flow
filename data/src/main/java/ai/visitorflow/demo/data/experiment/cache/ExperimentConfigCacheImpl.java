@@ -5,6 +5,7 @@ import ai.visitorflow.demo.data.context.RequestContextHolder;
 import ai.visitorflow.demo.data.experiment.model.ExperimentEntity;
 import ai.visitorflow.demo.data.experiment.repository.ExperimentRepository;
 import ai.visitorflow.demo.data.experiment.repository.VariantRepository;
+import ai.visitorflow.demo.data.transaction.PostCommitExecutor;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,8 +15,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 
 @Component
@@ -29,6 +28,7 @@ class ExperimentConfigCacheImpl implements ExperimentConfigCache {
   private final VariantRepository variantRepository;
   private final ExperimentConfigMapper experimentConfigMapper;
   private final ExperimentCacheProperties cacheProperties;
+  private final PostCommitExecutor postCommitExecutor;
 
   @Override
   public Map<Long, ExperimentConfigCacheDto> get(List<Long> experimentIds) {
@@ -46,18 +46,9 @@ class ExperimentConfigCacheImpl implements ExperimentConfigCache {
   }
 
   @Override
-  public void clear() {
+  public void clearAfterCommit() {
     Long tenantId = RequestContextHolder.tenantId();
-    if (TransactionSynchronizationManager.isActualTransactionActive()) {
-      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-        @Override
-        public void afterCommit() {
-          clearNow(tenantId);
-        }
-      });
-      return;
-    }
-    clearNow(tenantId);
+    postCommitExecutor.execute(() -> clearNow(tenantId));
   }
 
   private Map<Long, ExperimentConfigCacheDto> readRedis(List<Long> experimentIds, Long tenantId) {

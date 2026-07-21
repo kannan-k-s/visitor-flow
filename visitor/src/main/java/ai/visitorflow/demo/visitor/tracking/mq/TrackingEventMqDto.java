@@ -1,5 +1,6 @@
 package ai.visitorflow.demo.visitor.tracking.mq;
 
+import ai.visitorflow.demo.data.event.model.EventStatus;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 import lombok.AccessLevel;
@@ -26,7 +27,7 @@ public class TrackingEventMqDto {
   private Long anonVisitorId;
 
   @JsonProperty("status")
-  private String status;
+  private EventStatus status;
 
   @JsonProperty("occurred_at")
   private Instant occurredAt;

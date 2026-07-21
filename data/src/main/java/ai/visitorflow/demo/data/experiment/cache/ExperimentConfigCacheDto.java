@@ -1,5 +1,6 @@
 package ai.visitorflow.demo.data.experiment.cache;
 
+import ai.visitorflow.demo.data.experiment.model.AssignmentStrategy;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import lombok.AccessLevel;
@@ -17,7 +18,7 @@ public class ExperimentConfigCacheDto {
   private Long experimentId;
 
   @JsonProperty("strategy")
-  private String strategy;
+  private AssignmentStrategy strategy;
 
   @JsonProperty("default_variant_id")
   private Long defaultVariantId;

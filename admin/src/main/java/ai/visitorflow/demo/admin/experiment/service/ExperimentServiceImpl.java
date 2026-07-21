@@ -9,10 +9,10 @@ import ai.visitorflow.demo.admin.experiment.dto.response.ExperimentSummaryRespon
 import ai.visitorflow.demo.admin.experiment.dto.response.PagedResponse;
 import ai.visitorflow.demo.admin.experiment.mapper.ExperimentMapper;
 import ai.visitorflow.demo.data.context.RequestContextHolder;
-import ai.visitorflow.demo.data.event.repository.EventRepository;
 import ai.visitorflow.demo.data.exception.NotFoundException;
 import ai.visitorflow.demo.data.exception.ValidationException;
 import ai.visitorflow.demo.data.experiment.cache.ExperimentConfigCache;
+import ai.visitorflow.demo.data.experiment.model.AssignmentStrategy;
 import ai.visitorflow.demo.data.experiment.model.ExperimentEntity;
 import ai.visitorflow.demo.data.experiment.model.VariantEntity;
 import ai.visitorflow.demo.data.experiment.repository.ExperimentRepository;
@@ -31,12 +31,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 class ExperimentServiceImpl implements ExperimentService {
-  private static final String ANALYTICS_WARNING =
-    "Changing variants or allocation after traffic has started may skew analytics.";
-
   private final ExperimentRepository experimentRepository;
   private final VariantRepository variantRepository;
-  private final EventRepository eventRepository;
   private final ExperimentConfigCache experimentConfigCache;
   private final ExperimentMapper experimentMapper;
 
@@ -53,8 +49,8 @@ class ExperimentServiceImpl implements ExperimentService {
       .map(variant -> experimentMapper.toVariant(variant, experiment.getId()))
       .toList();
     variants = variantRepository.saveAll(variants);
-    experimentConfigCache.clear();
-    return experimentMapper.toResponse(experiment, variants, null);
+    experimentConfigCache.clearAfterCommit();
+    return experimentMapper.toResponse(experiment, variants);
   }
 
   @Override
@@ -72,7 +68,7 @@ class ExperimentServiceImpl implements ExperimentService {
     ExperimentEntity experiment = find(experimentId, tenantId);
     List<VariantEntity> variants = variantRepository
       .findAllByExperimentIdAndTenantIdOrderByIdAsc(experimentId, tenantId);
-    return experimentMapper.toResponse(experiment, variants, null);
+    return experimentMapper.toResponse(experiment, variants);
   }
 
   @Override
@@ -106,11 +102,9 @@ class ExperimentServiceImpl implements ExperimentService {
         variant.getId(), experimentId, tenantId
       ));
     updated = variantRepository.saveAll(updated);
-    String warning = eventRepository.existsByExperimentIdAndTenantId(experimentId, tenantId)
-      ? ANALYTICS_WARNING : null;
-    experimentConfigCache.clear();
+    experimentConfigCache.clearAfterCommit();
     return experimentMapper.toResponse(experiment, updated.stream()
-      .sorted((left, right) -> left.getId().compareTo(right.getId())).toList(), warning);
+      .sorted((left, right) -> left.getId().compareTo(right.getId())).toList());
   }
 
   @Override
@@ -120,7 +114,7 @@ class ExperimentServiceImpl implements ExperimentService {
     find(experimentId, tenantId);
     variantRepository.deleteAllByExperimentIdAndTenantId(experimentId, tenantId);
     experimentRepository.deleteByIdAndTenantId(experimentId, tenantId);
-    experimentConfigCache.clear();
+    experimentConfigCache.clearAfterCommit();
     return experimentMapper.toDeleteResponse(experimentId);
   }
 
@@ -129,8 +123,10 @@ class ExperimentServiceImpl implements ExperimentService {
       .orElseThrow(() -> new NotFoundException("experiment", experimentId));
   }
 
-  private void validate(String strategy, List<VariantRequest> variants, boolean creating) {
-    if (!"hash".equals(strategy)) {
+  private void validate(
+    AssignmentStrategy strategy, List<VariantRequest> variants, boolean creating
+  ) {
+    if (strategy != AssignmentStrategy.HASH) {
       throw new ValidationException("Only the hash assignment strategy is supported in v0");
     }
     BigDecimal total = variants.stream()

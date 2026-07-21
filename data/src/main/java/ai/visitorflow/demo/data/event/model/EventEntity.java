@@ -6,7 +6,6 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -15,9 +14,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(name = "events", uniqueConstraints = @UniqueConstraint(
-  name = "uk_events_dedup", columnNames = {"tenant_id", "experiment_id", "anon_visitor_id", "status"}
-))
+@Table(name = "events")
 @Getter
 @Builder
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -40,7 +37,7 @@ public class EventEntity {
   private Long anonVisitorId;
 
   @Column(nullable = false, length = 16)
-  private String status;
+  private EventStatus status;
 
   @Column(name = "occurred_at", nullable = false)
   private Instant occurredAt;

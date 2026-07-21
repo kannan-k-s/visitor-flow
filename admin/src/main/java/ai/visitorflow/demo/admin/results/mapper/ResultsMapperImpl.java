@@ -5,8 +5,6 @@ import ai.visitorflow.demo.admin.results.dto.response.VariantResultResponse;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
-import lombok.Builder;
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.modelmapper.ModelMapper;
 import org.springframework.stereotype.Component;
@@ -20,13 +18,7 @@ class ResultsMapperImpl implements ResultsMapper {
   public VariantResultResponse toVariant(Long variantId, long assigned, long exposed, long converted) {
     BigDecimal conversionRate = exposed == 0 ? BigDecimal.ZERO : BigDecimal.valueOf(converted)
       .divide(BigDecimal.valueOf(exposed), 4, RoundingMode.HALF_UP);
-    VariantResult source = VariantResult.builder()
-      .variantId(variantId)
-      .assigned(assigned)
-      .exposed(exposed)
-      .converted(converted)
-      .conversionRate(conversionRate)
-      .build();
+    VariantResult source = new VariantResult(variantId, assigned, exposed, converted, conversionRate);
     return modelMapper.map(source, VariantResultResponse.class);
   }
 
@@ -34,29 +26,17 @@ class ResultsMapperImpl implements ResultsMapper {
   public ExperimentResultsResponse toResponse(
     Long experimentId, List<VariantResultResponse> variants, long orphanConverted
   ) {
-    ExperimentResult source = ExperimentResult.builder()
-      .experimentId(experimentId)
-      .variants(variants)
-      .orphanConverted(orphanConverted)
-      .build();
+    ExperimentResult source = new ExperimentResult(experimentId, variants, orphanConverted);
     return modelMapper.map(source, ExperimentResultsResponse.class);
   }
 
-  @Getter
-  @Builder
-  private static class VariantResult {
-    private Long variantId;
-    private long assigned;
-    private long exposed;
-    private long converted;
-    private BigDecimal conversionRate;
+  private record VariantResult(
+    Long variantId, long assigned, long exposed, long converted, BigDecimal conversionRate
+  ) {
   }
 
-  @Getter
-  @Builder
-  private static class ExperimentResult {
-    private Long experimentId;
-    private List<VariantResultResponse> variants;
-    private long orphanConverted;
+  private record ExperimentResult(
+    Long experimentId, List<VariantResultResponse> variants, long orphanConverted
+  ) {
   }
 }

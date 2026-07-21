@@ -7,7 +7,6 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -19,9 +18,7 @@ import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 @Entity
-@Table(name = "experiments", uniqueConstraints = @UniqueConstraint(
-  name = "uk_experiments_tenant_name", columnNames = {"tenant_id", "name"}
-))
+@Table(name = "experiments")
 @EntityListeners(AuditingEntityListener.class)
 @Getter
 @Builder
@@ -40,7 +37,7 @@ public class ExperimentEntity {
 
   @Builder.Default
   @Column(nullable = false, length = 16)
-  private String strategy = "hash";
+  private AssignmentStrategy strategy = AssignmentStrategy.HASH;
 
   @Builder.Default
   @Column(name = "sticky_bucketing", nullable = false)

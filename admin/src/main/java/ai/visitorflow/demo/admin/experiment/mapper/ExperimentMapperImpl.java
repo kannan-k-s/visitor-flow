@@ -9,11 +9,10 @@ import ai.visitorflow.demo.admin.experiment.dto.response.ExperimentSummaryRespon
 import ai.visitorflow.demo.admin.experiment.dto.response.PagedResponse;
 import ai.visitorflow.demo.admin.experiment.dto.response.VariantResponse;
 import ai.visitorflow.demo.data.context.RequestContextHolder;
+import ai.visitorflow.demo.data.experiment.model.AssignmentStrategy;
 import ai.visitorflow.demo.data.experiment.model.ExperimentEntity;
 import ai.visitorflow.demo.data.experiment.model.VariantEntity;
 import java.util.List;
-import lombok.Builder;
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.modelmapper.ModelMapper;
 import org.springframework.data.domain.Page;
@@ -52,19 +51,13 @@ class ExperimentMapperImpl implements ExperimentMapper {
   }
 
   @Override
-  public ExperimentResponse toResponse(
-    ExperimentEntity experiment, List<VariantEntity> variants, String analyticsWarning
-  ) {
+  public ExperimentResponse toResponse(ExperimentEntity experiment, List<VariantEntity> variants) {
     List<VariantResponse> variantResponses = variants.stream()
       .map(variant -> modelMapper.map(variant, VariantResponse.class))
       .toList();
-    ExperimentView source = ExperimentView.builder()
-      .id(experiment.getId())
-      .name(experiment.getName())
-      .strategy(experiment.getStrategy())
-      .variants(variantResponses)
-      .analyticsWarning(analyticsWarning)
-      .build();
+    ExperimentView source = new ExperimentView(
+      experiment.getId(), experiment.getName(), experiment.getStrategy(), variantResponses
+    );
     return modelMapper.map(source, ExperimentResponse.class);
   }
 
@@ -74,46 +67,28 @@ class ExperimentMapperImpl implements ExperimentMapper {
     List<ExperimentSummaryResponse> items = experiments.getContent().stream()
       .map(experiment -> modelMapper.map(experiment, ExperimentSummaryResponse.class))
       .toList();
-    ExperimentPage source = ExperimentPage.builder()
-      .items(items)
-      .page(experiments.getNumber())
-      .size(experiments.getSize())
-      .totalElements(experiments.getTotalElements())
-      .totalPages(experiments.getTotalPages())
-      .build();
+    ExperimentPage source = new ExperimentPage(
+      items, experiments.getNumber(), experiments.getSize(),
+      experiments.getTotalElements(), experiments.getTotalPages()
+    );
     return modelMapper.map(source, PagedResponse.class);
   }
 
   @Override
   public DeleteExperimentResponse toDeleteResponse(Long experimentId) {
-    DeleteResult source = DeleteResult.builder().experimentId(experimentId).deleted(true).build();
-    return modelMapper.map(source, DeleteExperimentResponse.class);
+    return modelMapper.map(new DeleteResult(experimentId, true), DeleteExperimentResponse.class);
   }
 
-  @Getter
-  @Builder
-  private static class ExperimentView {
-    private Long id;
-    private String name;
-    private String strategy;
-    private List<VariantResponse> variants;
-    private String analyticsWarning;
+  private record ExperimentView(
+    Long id, String name, AssignmentStrategy strategy, List<VariantResponse> variants
+  ) {
   }
 
-  @Getter
-  @Builder
-  private static class ExperimentPage {
-    private List<ExperimentSummaryResponse> items;
-    private int page;
-    private int size;
-    private long totalElements;
-    private int totalPages;
+  private record ExperimentPage(
+    List<ExperimentSummaryResponse> items, int page, int size, long totalElements, int totalPages
+  ) {
   }
 
-  @Getter
-  @Builder
-  private static class DeleteResult {
-    private Long experimentId;
-    private boolean deleted;
+  private record DeleteResult(Long experimentId, boolean deleted) {
   }
 }

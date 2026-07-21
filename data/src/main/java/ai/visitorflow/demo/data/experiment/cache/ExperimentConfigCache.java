@@ -5,5 +5,5 @@ import java.util.Map;
 
 public interface ExperimentConfigCache {
   Map<Long, ExperimentConfigCacheDto> get(List<Long> experimentIds);
-  void clear();
+  void clearAfterCommit();
 }

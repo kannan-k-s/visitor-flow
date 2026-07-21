@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 
 import ai.visitorflow.demo.data.experiment.model.ExperimentEntity;
+import ai.visitorflow.demo.data.experiment.model.AssignmentStrategy;
 import ai.visitorflow.demo.data.experiment.model.VariantEntity;
 import java.math.BigDecimal;
 import java.util.List;
@@ -25,7 +26,8 @@ class ExperimentConfigMapperImplTest {
 
   @Test
   void buildsStableBasisPointRangesAndDefaultVariant() {
-    ExperimentEntity experiment = ExperimentEntity.builder().id(7L).tenantId(1L).strategy("hash").build();
+    ExperimentEntity experiment = ExperimentEntity.builder()
+      .id(7L).tenantId(1L).strategy(AssignmentStrategy.HASH).build();
     List<VariantEntity> variants = List.of(
       variant(11L, true, "50.00"), variant(12L, false, "35.25"), variant(13L, false, "14.75")
     );
@@ -33,6 +35,8 @@ class ExperimentConfigMapperImplTest {
     ExperimentConfigCacheDto result = mapper.toCache(experiment, variants);
 
     assertThat(result.getDefaultVariantId()).isEqualTo(11L);
+    assertThat(result.getVariants()).extracting(VariantAllocationCacheDto::getContent)
+      .containsExactly("content", "content", "content");
     assertThat(result.getVariants())
       .extracting(VariantAllocationCacheDto::getLowerBucket, VariantAllocationCacheDto::getUpperBucket)
       .containsExactly(tuple(0, 4999), tuple(5000, 8524), tuple(8525, 9999));

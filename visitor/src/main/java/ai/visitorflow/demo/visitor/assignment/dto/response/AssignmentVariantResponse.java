@@ -2,7 +2,6 @@ package ai.visitorflow.demo.visitor.assignment.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import java.util.Map;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -13,14 +12,11 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
-public class AssignResponse {
-  @JsonProperty("assignments")
-  private Map<Long, AssignmentVariantResponse> assignments;
-
-  @JsonProperty("anon_visitor_id")
+public class AssignmentVariantResponse {
+  @JsonProperty("id")
   @JsonFormat(shape = JsonFormat.Shape.STRING)
-  private Long anonVisitorId;
+  private Long variantId;
 
-  @JsonProperty("degraded")
-  private boolean degraded;
+  @JsonProperty("content")
+  private String content;
 }

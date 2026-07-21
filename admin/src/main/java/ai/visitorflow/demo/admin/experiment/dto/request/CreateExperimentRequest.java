@@ -1,5 +1,6 @@
 package ai.visitorflow.demo.admin.experiment.dto.request;
 
+import ai.visitorflow.demo.data.experiment.model.AssignmentStrategy;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -21,7 +22,7 @@ public class CreateExperimentRequest {
 
   @JsonProperty("strategy")
   @Builder.Default
-  private String strategy = "hash";
+  private AssignmentStrategy strategy = AssignmentStrategy.HASH;
 
   @JsonProperty("variants")
   @Valid
