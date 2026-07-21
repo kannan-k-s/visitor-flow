@@ -58,14 +58,22 @@ I/O on the render path, sticky across restarts with zero storage. See `design.md
 
 The Maven wrapper is included — no local Maven install needed.
 
+Because this is a multi-module build and **only the `web` module is executable**, run
+the app in two steps — install the library modules to your local repo, then start
+`web`. (`spring-boot:run` across the whole reactor fails: the other modules have no
+main class.) The app resolves its secrets from the environment, so make the `.env`
+values available first (in Git Bash / macOS / Linux: `set -a; source .env; set +a`).
+
 ```bash
 # Windows
-mvnw.cmd clean verify                    # build the whole reactor (compile + test + package)
-mvnw.cmd -pl web -am spring-boot:run     # run the app (web module bootstraps the rest)
+mvnw.cmd clean verify                 # full reactor build: compile + test + package
+mvnw.cmd install -DskipTests          # install all modules to the local repo (fast, no tests)
+mvnw.cmd -pl web spring-boot:run      # run the app (web module only)
 
 # macOS / Linux
 ./mvnw clean verify
-./mvnw -pl web -am spring-boot:run
+./mvnw install -DskipTests
+./mvnw -pl web spring-boot:run
 ```
 
 Testing commands, environment setup, coverage, expected counts, and troubleshooting are in
@@ -73,6 +81,7 @@ Testing commands, environment setup, coverage, expected counts, and troubleshoot
 the live HTTP API and local infrastructure.
 
 Once running:
+- Admin UI (needs the nginx stack on port 80): `http://localhost/demo/login`
 - API docs (Swagger UI): `http://localhost:8080/swagger-ui.html`
 - Health: `http://localhost:8080/actuator/health`
 
