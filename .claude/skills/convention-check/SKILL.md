@@ -53,7 +53,7 @@ check those instead.
   destination type using `final` fields or missing a no-arg constructor (ModelMapper can't
   populate it).
 - **Context lifecycle (§3)** — `RequestContextHolder.set(...)` or `.clear()` called anywhere
-  outside the filter layer (`common/web`). Only the filter owns the thread-local's lifespan.
+  outside the filter layer (`visitor.web` / `admin.web`). Only the filter owns the thread-local's lifespan.
 - **Code style (§5)** — 4-space or tab indentation instead of 2 spaces; Allman braces (`{` on
   its own line); one-argument-per-line method signatures.
 - **Bonus** — schema change via `ddl-auto` instead of a Liquibase changelog; any real

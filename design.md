@@ -146,7 +146,7 @@ weights A=5,B=1 → A A A B A A  (exactly 5:1, interleaved, from visitor 1)
 
 - Decides by **arrival order** → **not reproducible** → must **persist `identity→variant`** and needs a **shared atomic counter**.
 - **Atomicity:** the full read-modify-write (add weights → argmax → subtract → return) runs as a **single Redis Lua script** — race-free across nodes.
-- Costs a hot counter key + per-visitor storage; falls back to default on infra failure — hence **opt-in**. Its only edge (exact small-N) is statistically irrelevant where results have no power (§14).
+- Costs a hot counter key + per-visitor storage; falls back to default on infra failure — hence **opt-in**. It exists for a real need: **exact allocation from visitor 1** on a low-traffic experiment where a stakeholder wants a precise split honoured immediately. Trading statelessness for that exactness is worth it only when it's a hard requirement — at scale, hash's expectation-level accuracy already holds (§14) — so hash stays the default.
 
 ### 6.4 Strategy = per-experiment config
 
@@ -345,7 +345,7 @@ Redis keys (rebuildable / ephemeral): `cfg:{tenant}:{exp}` · `link:{tenant}:vis
 |---|---|---|
 | D-1 | 10,000 buckets as the fixed 100% | Integer math, 0.01% precision, inspectable. |
 | D-2 | `murmur3(anon_visitor_id + ":" + exp_id)` | Avalanche defeats structured-id skew; salt decorrelates experiments. |
-| D-3 | Hash default, SWRR opt-in | Hash is stateless/fail-safe/scalable; SWRR's exact small-N edge is irrelevant + costly. |
+| D-3 | Hash default, SWRR opt-in | Hash is stateless/fail-safe/scalable → the default. SWRR buys exact allocation from visitor 1 for low-traffic experiments that need it, at the cost of state — opt-in so that cost is paid only when exactness is a hard requirement. |
 | D-4 | Two ids; server sets no cookie | Client-owned first-party cookie avoids 3rd-party issues; login id linked as alias, no flip. |
 | D-5 | SWRR counter via single Redis Lua script | Atomic RMW, race-free across nodes. |
 | D-6 | Fail-to-**default variant** on timeout | Known-safe baseline; never an untested variant during an outage. |

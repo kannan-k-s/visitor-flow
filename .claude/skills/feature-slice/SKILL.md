@@ -5,39 +5,49 @@ description: Scaffold a new versioned API feature (controller → service → DT
 
 # Feature slice scaffold
 
-Generate a complete vertical slice for one resource under `ai.visitorflow.demo.<feature>`,
-following **every** rule in `AGENTS.md` §2 and the code style in §5 (2-space indent,
-K&R braces). Read `AGENTS.md` first if not already loaded.
+Generate a complete vertical slice for one resource. The slice **spans two Maven modules**
+(`design.md` §2): the entity + repository go in the `data` module
+(`ai.visitorflow.demo.data.<feature>`), and the controller/service/DTOs/mapper go in the
+owning plane module — `visitor` (data plane) or `admin` (control plane), under
+`ai.visitorflow.demo.<plane>.<feature>`. The plane module already depends on `data`, so the
+mapper/service import the entity + repository across that boundary. Follow **every** rule in
+`AGENTS.md` §2 and the code style in §5 (2-space indent, K&R braces). Read `AGENTS.md` first
+if not already loaded.
 
 ## Before generating
 Confirm (ask only if ambiguous):
-- **Feature/module name** (e.g. `experiment`, `tracking`) and **resource** (e.g. `Experiment`).
-- **Plane**: control plane (OAuth/RBAC) or data plane (API-key, fail-safe). Data-plane
-  endpoints must degrade to a safe default, never error on the render path (`design.md` §7.7).
+- **Feature name** (e.g. `experiment`, `tracking`) and **resource** (e.g. `Experiment`).
+- **Plane → module**: control plane → `admin` (OAuth/RBAC); data plane → `visitor`
+  (anonymous, fail-safe). Data-plane endpoints must degrade to a safe default, never error
+  on the render path (`design.md` §6.6).
 - **Operations** needed (create/get/list/patch/lifecycle…).
-- That the shared `ModelMapper` bean exists (`common/config/MappingConfig`). If not, create it
-  once (see the snippet in `AGENTS.md` R11).
+- That the shared `ModelMapper` bean exists (`data/config/MappingConfig` in the `data`
+  module). If not, create it once (see the snippet in `AGENTS.md` R11).
 
-## Files to create (per resource `Xxx` in feature `feat`)
+## Files to create (resource `Xxx`, feature `feat`, plane module `plane` ∈ {`visitor`, `admin`})
 
 ```
-feat/controller/v1/XxxController.java
-feat/service/XxxService.java               (public interface — R10)
-feat/service/XxxServiceImpl.java           (package-protected impl — R10)
-feat/dto/request/CreateXxxRequest.java     (+ other requests as needed)
-feat/dto/response/XxxResponse.java
-feat/mapper/XxxMapper.java                 (public interface — R10)
-feat/mapper/XxxMapperImpl.java             (package-protected impl, delegates to ModelMapper — R10/R11)
-feat/repository/XxxRepository.java
-feat/model/XxxEntity.java
+data module   — ai.visitorflow.demo.data.feat
+  model/XxxEntity.java
+  repository/XxxRepository.java
+plane module  — ai.visitorflow.demo.plane.feat
+  controller/v1/XxxController.java
+  service/XxxService.java               (public interface — R10)
+  service/XxxServiceImpl.java           (package-protected impl — R10)
+  dto/request/CreateXxxRequest.java     (+ other requests as needed)
+  dto/response/XxxResponse.java
+  mapper/XxxMapper.java                 (public interface — R10)
+  mapper/XxxMapperImpl.java             (package-protected impl, delegates to ModelMapper — R10/R11)
 ```
-Add a Liquibase changelog for any new table (never `ddl-auto`).
+The service/mapper import `data.feat.model.XxxEntity` and `data.feat.repository.XxxRepository`
+across the module boundary (the plane module depends on `data`). Add a Liquibase changelog in
+the `data` module for any new table (never `ddl-auto`).
 
 ## Templates (adapt names/fields; keep the annotations exactly; 2-space indent)
 
 **Controller** — versioned (R1), one service call returning a DTO, no ambient params (R2, R6):
 ```java
-package ai.visitorflow.demo.feat.controller.v1;
+package ai.visitorflow.demo.plane.feat.controller.v1;   // plane = visitor | admin
 
 @RestController
 @RequestMapping("/v1/xxxs")
@@ -61,7 +71,7 @@ public class XxxController {
 reads context (R7), returns DTO (R2), passes tenantId only to repo (R9):
 ```java
 // XxxService.java — public contract (R10)
-package ai.visitorflow.demo.feat.service;
+package ai.visitorflow.demo.plane.feat.service;
 
 public interface XxxService {
   XxxResponse create(CreateXxxRequest request);
@@ -70,7 +80,7 @@ public interface XxxService {
 ```
 ```java
 // XxxServiceImpl.java — package-protected impl, SAME package (R10)
-package ai.visitorflow.demo.feat.service;
+package ai.visitorflow.demo.plane.feat.service;
 
 @Service                                       // no `public` on the class — R10
 @RequiredArgsConstructor                       // R4
@@ -97,7 +107,7 @@ class XxxServiceImpl implements XxxService {
 
 **Request DTO** — `@Builder @Getter` (R3), `@JsonProperty` snake_case (R5), no ambient fields (R6):
 ```java
-package ai.visitorflow.demo.feat.dto.request;
+package ai.visitorflow.demo.plane.feat.dto.request;
 
 @Getter
 @Builder
@@ -116,7 +126,7 @@ public class CreateXxxRequest {
 **Response DTO** — `@Builder @Getter` (R3), every field `@JsonProperty` snake_case (R5),
 non-`final` private fields + no-arg ctor so ModelMapper can populate it (R11):
 ```java
-package ai.visitorflow.demo.feat.dto.response;
+package ai.visitorflow.demo.plane.feat.dto.response;
 
 @Getter
 @Builder
@@ -133,7 +143,7 @@ public class XxxResponse {
 `ModelMapper` bean (R11); invoked from the service, never from the model (R2/R8):
 ```java
 // XxxMapper.java — public contract (R10)
-package ai.visitorflow.demo.feat.mapper;
+package ai.visitorflow.demo.plane.feat.mapper;
 
 public interface XxxMapper {
   XxxEntity toEntity(CreateXxxRequest req, Long tenantId);
@@ -142,7 +152,7 @@ public interface XxxMapper {
 ```
 ```java
 // XxxMapperImpl.java — package-protected impl (R10), uses ModelMapper (R11)
-package ai.visitorflow.demo.feat.mapper;
+package ai.visitorflow.demo.plane.feat.mapper;
 
 @Component                                     // no `public` on the class — R10
 @RequiredArgsConstructor                       // R4
@@ -169,7 +179,7 @@ class XxxMapperImpl implements XxxMapper {
 
 **Repository** — every method takes `tenantId` (R9):
 ```java
-package ai.visitorflow.demo.feat.repository;
+package ai.visitorflow.demo.data.feat.repository;
 
 public interface XxxRepository extends JpaRepository<XxxEntity, Long> {
   Optional<XxxEntity> findByIdAndTenantId(Long id, Long tenantId);
@@ -181,7 +191,7 @@ public interface XxxRepository extends JpaRepository<XxxEntity, Long> {
 **Entity** — `@Builder @Getter` (R3), plain `Long` FKs, no associations (R8), non-`final`
 fields + no-arg ctor for JPA/ModelMapper (R11):
 ```java
-package ai.visitorflow.demo.feat.model;
+package ai.visitorflow.demo.data.feat.model;
 
 @Entity
 @Table(name = "xxxs", indexes = @Index(name = "ix_xxx_tenant", columnList = "tenant_id"))

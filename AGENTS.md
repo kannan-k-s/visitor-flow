@@ -18,8 +18,8 @@ implementing this **partially, not fully** — build the core, defend every choi
 
 Two planes with opposite requirements:
 
-- **Data plane** (hot, public, browser-facing): `/v1/assign`, `/v1/track/*`.
-  Latency-critical, API-key auth, rate-limited, **fail-safe (never breaks the page)**.
+- **Data plane** (hot, public, browser-facing): `/{tenant}/v1/assign`, `/{tenant}/v1/track`.
+  Latency-critical, **anonymous (no auth)**, rate-limited, **fail-safe (never breaks the page)**.
 - **Control plane** (warm, private, human-facing): experiment CRUD + results
   dashboard. OAuth + RBAC.
 
@@ -41,7 +41,9 @@ Enforced in review and by the `convention-check` skill. Each rule has a ✅ do /
 
 ### R1 — All APIs are versioned
 Every public path starts with a version segment. Controllers live in a `...controller.v1`
-package. Bump to `v2` for breaking changes; never break `v1` in place.
+package. Bump to `v2` for breaking changes; never break `v1` in place. Public paths
+additionally carry a leading `/{tenant}` segment that the filter resolves and consumes
+(§3) — e.g. `/{tenant}/v1/experiments` — so controller mappings still begin at the version.
 
 ```java
 ✅ @RestController
@@ -227,7 +229,7 @@ Mechanics (so it coexists with R3's no-setters rule):
   `@NoArgsConstructor(access = PRIVATE)`).
 
 ```java
-// common/config — one configured, field-access ModelMapper for the whole app
+// data/config — one configured, field-access ModelMapper shared by all modules
 @Configuration
 class MappingConfig {
   @Bean
@@ -260,8 +262,9 @@ class MappingConfig {
 ## 3. Request context (how R6, R7, R9 fit together)
 
 Ambient request data lives in a thread-local `RequestContext`, populated once per
-request by the servlet filter (from the API key on the data plane, or the OAuth
-session on the control plane).
+request by the servlet filter — the tenant from the `{tenant}` segment of the URL
+path on **both** planes, the visitor id from a request header on the data plane
+(anonymous, no auth), and the user from the OAuth session on the control plane.
 
 ```java
 @Getter
@@ -271,7 +274,7 @@ public final class RequestContext {
   private final Long tenantId;        // always present after auth
   private final Long userId;          // control plane only
   private final String visitorId;     // data plane only
-  private final Set<String> scopes;   // api-key scopes: assign, track, …
+  private final Set<String> scopes;   // control-plane RBAC privileges
   private final String correlationId;
 }
 
@@ -295,11 +298,11 @@ app sets or clears the context — controllers and services read it (`get()` /
 thread-local's lifespan and guarantees it is always cleared (leak-free thread reuse).
 
 ```java
-// common/web — the ONLY place RequestContext is set or cleared
+// filter layer (visitor.web / admin.web) — the ONLY place RequestContext is set or cleared
 @Component
 @RequiredArgsConstructor
 class RequestContextFilter extends OncePerRequestFilter {
-  private final PrincipalResolver principalResolver;   // api-key or session → RequestContext
+  private final PrincipalResolver principalResolver;   // tenant (from path) + identity → RequestContext
 
   @Override
   protected void doFilterInternal(
@@ -323,30 +326,42 @@ tenantId; services never take it as a param; repositories always require it.
 
 ## 4. Package layout
 
-Feature-oriented modules, layered inside. Base package `ai.visitorflow.demo`.
+**Multi-module Maven build** (`design.md` §2) — the module split follows the plane
+boundary; assembled into one deployable (`web`) now. Base group `ai.visitorflow`,
+base package `ai.visitorflow.demo`.
 
 ```
-ai.visitorflow.demo
-├── common/
-│   ├── context/      RequestContext, RequestContextHolder
-│   ├── web/          RequestContextFilter (sets/clears context), @ControllerAdvice
-│   ├── config/       @Configuration beans (MappingConfig/ModelMapper, Redis, Kafka, Security, OpenAPI)
-│   └── exception/    domain exceptions + error DTOs
-├── experiment/       control plane: experiment CRUD & lifecycle
-│   ├── controller/v1/
-│   ├── service/      public XxxService interface + package-protected XxxServiceImpl (R10)
-│   ├── dto/{request,response}/
-│   ├── mapper/       XxxMapper interface + package-protected impl; delegates to ModelMapper (R10/R11)
-│   ├── repository/
-│   └── model/        JPA entities (plain Long FKs — R8)
-├── assignment/       data plane: /v1/assign, strategies (hash | swrr), fallback
-├── tracking/         data plane: /v1/track/exposure|conversion, idempotency
-└── results/          control plane: per-experiment aggregates + validity
+demo (parent · pom)
+├── data ──────────  shared persistence + domain; both planes depend on it, it depends on neither
+│   └── ai.visitorflow.demo.data
+│       ├── context/          RequestContext, RequestContextHolder
+│       ├── config/           @Configuration: MappingConfig/ModelMapper, Redis, Kafka, DataSource
+│       ├── exception/        domain exceptions + error DTOs
+│       └── <feature>/
+│           ├── model/        JPA entities (plain Long FKs — R8)
+│           └── repository/   tenant-scoped repositories (R9)
+├── visitor ───────  data plane (anonymous, hot, fail-safe); depends on data
+│   └── ai.visitorflow.demo.visitor
+│       ├── web/              data-plane filter (tenant + anon/visitor → context), rate limiting
+│       ├── assignment/       /{tenant}/v1/assign — strategies (hash | swrr), fallback
+│       └── tracking/         /{tenant}/v1/track  — one endpoint {status, data}, idempotency, producer
+├── admin ─────────  control plane (OAuth + RBAC, consistent); depends on data
+│   └── ai.visitorflow.demo.admin
+│       ├── web/              control-plane filter (tenant + OAuth session → context), @ControllerAdvice
+│       ├── experiment/       experiment CRUD & lifecycle
+│       └── results/          per-experiment aggregates + validity
+└── web ───────────  runnable app; depends on admin + visitor (only module that repackages)
+    └── ai.visitorflow.demo
+        ├── DemoApplication   @SpringBootApplication — component-scans every module
+        └── web/{security,filter,config}   OAuth login + JWT · filter registration/order · OpenAPI
 ```
 
-Mapping (entity ↔ DTO) is a `mapper` (R10) that delegates to ModelMapper (R11),
-invoked from the **service** — never logic inside an entity (R8) and never in a
-controller (R2).
+Each plane feature (`assignment`, `tracking`, `experiment`, `results`) is layered inside:
+`controller/v1/ · service/ · dto/{request,response}/ · mapper/`. A **vertical slice spans
+two modules**: entity + repository live in `data.<feature>` (R8/R9); the
+controller/service/DTOs/mapper live in the owning plane — `visitor.<feature>` or
+`admin.<feature>`. Mapping (entity ↔ DTO) is a `mapper` (R10) delegating to ModelMapper
+(R11), invoked from the **service** — never in an entity (R8) or a controller (R2).
 
 ---
 
