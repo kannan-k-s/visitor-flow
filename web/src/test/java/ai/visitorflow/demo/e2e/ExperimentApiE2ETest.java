@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,6 +51,8 @@ class ExperimentApiE2ETest {
   private static final Duration EVENT_TIMEOUT = Duration.ofSeconds(10);
   private static final Duration EVENT_POLL_DELAY = Duration.ofMillis(250);
   private static final Duration BROKER_RECOVERY_TIMEOUT = Duration.ofSeconds(30);
+  private static final String PARTITION_QUEUE_PREFIX = "tracking-events.tracking-events-v0-";
+  private static final int PARTITION_COUNT = 4;
 
   @LocalServerPort
   private int port;
@@ -70,6 +73,7 @@ class ExperimentApiE2ETest {
   private APIRequestContext anonymous;
   private APIRequestContext authenticated;
   private APIRequestContext wrongTenant;
+  private APIRequestContext rabbitManagement;
   private Long experimentId;
   private Long firstVariantId;
   private Long secondVariantId;
@@ -93,6 +97,7 @@ class ExperimentApiE2ETest {
     anonymous = context(Map.of());
     authenticated = context(Map.of("Cookie", "session=" + session));
     wrongTenant = context(Map.of("Cookie", "session=" + mismatchedSession));
+    rabbitManagement = rabbitManagementContext();
     experimentName = "playwright-e2e-" + UUID.randomUUID();
     visitorId = "client-visitor-" + UUID.randomUUID();
   }
@@ -104,6 +109,9 @@ class ExperimentApiE2ETest {
     }
     if (wrongTenant != null) {
       wrongTenant.dispose();
+    }
+    if (rabbitManagement != null) {
+      rabbitManagement.dispose();
     }
     if (authenticated != null) {
       authenticated.dispose();
@@ -274,6 +282,29 @@ class ExperimentApiE2ETest {
 
   @Test
   @Order(5)
+  void coversAllRabbitPartitionsAndEventIngestion() throws InterruptedException {
+    Map<Integer, Long> initialPublishCounts = partitionPublishCounts();
+    String path = "/" + TENANT + "/v1/track";
+    Map<String, Object> event = trackingRequest("exposed", Map.of(experimentId, primaryVariantId));
+    for (int partition = 0; partition < PARTITION_COUNT; partition++) {
+      long anonVisitorId = 100_000L + partition;
+      assertThat(Math.floorMod(Long.hashCode(anonVisitorId), PARTITION_COUNT)).isEqualTo(partition);
+      assertAccepted(anonymous.post(
+        path, json(event).setHeader("X-Anon-Id", String.valueOf(anonVisitorId))
+      ), 1);
+    }
+    expectedExposed.merge(primaryVariantId, PARTITION_COUNT, Integer::sum);
+    awaitAllPartitionsPublished(initialPublishCounts);
+    JsonNode results = awaitResults();
+    int exposed = 0;
+    for (JsonNode variant : results.get("variants")) {
+      exposed += variant.get("exposed").asInt();
+    }
+    assertThat(exposed).isEqualTo(expectedExposed.values().stream().mapToInt(Integer::intValue).sum());
+  }
+
+  @Test
+  @Order(6)
   void coversEventuallyConsistentResultsApiBackedByRabbitEvents() throws InterruptedException {
     assertError(anonymous.get(experimentPath() + "/results"), 401, "unauthorized");
     assertError(authenticated.get(
@@ -298,7 +329,7 @@ class ExperimentApiE2ETest {
   }
 
   @Test
-  @Order(6)
+  @Order(7)
   void coversTrackingUnavailableAndBrokerRecovery() throws Exception {
     String path = "/" + TENANT + "/v1/track";
     Map<String, Object> event = trackingRequest("exposed", Map.of(experimentId, primaryVariantId));
@@ -315,7 +346,7 @@ class ExperimentApiE2ETest {
   }
 
   @Test
-  @Order(7)
+  @Order(8)
   void coversPostTrafficWarningAndDeleteApi() {
     JsonNode updated = body(assertStatus(authenticated.put(
       experimentPath(), json(updateRequest(55, 45, firstVariantId, secondVariantId))
@@ -340,6 +371,18 @@ class ExperimentApiE2ETest {
       .setBaseURL("http://localhost:" + port)
       .setExtraHTTPHeaders(headers)
       .setMaxRedirects(0)
+      .setTimeout(15_000));
+  }
+
+  private APIRequestContext rabbitManagementContext() {
+    String password = System.getenv("RABBITMQ_PASSWORD");
+    assertThat(password).as("RABBITMQ_PASSWORD must be loaded from .env").isNotBlank();
+    String credentials = Base64.getEncoder().encodeToString(
+      ("root:" + password).getBytes(StandardCharsets.UTF_8)
+    );
+    return playwright.request().newContext(new APIRequest.NewContextOptions()
+      .setBaseURL("http://localhost:15672")
+      .setExtraHTTPHeaders(Map.of("Authorization", "Basic " + credentials))
       .setTimeout(15_000));
   }
 
@@ -402,6 +445,42 @@ class ExperimentApiE2ETest {
       Thread.sleep(EVENT_POLL_DELAY.toMillis());
     } while (System.nanoTime() < deadline);
     throw new AssertionError("Tracking did not recover after RabbitMQ restarted");
+  }
+
+  private void awaitAllPartitionsPublished(Map<Integer, Long> initialCounts) throws InterruptedException {
+    long deadline = System.nanoTime() + EVENT_TIMEOUT.toNanos();
+    Map<Integer, Long> latest = Map.of();
+    do {
+      latest = partitionPublishCounts();
+      boolean allAdvanced = true;
+      for (int partition = 0; partition < PARTITION_COUNT; partition++) {
+        if (latest.getOrDefault(partition, 0L) <= initialCounts.getOrDefault(partition, 0L)) {
+          allAdvanced = false;
+          break;
+        }
+      }
+      if (allAdvanced) {
+        return;
+      }
+      Thread.sleep(EVENT_POLL_DELAY.toMillis());
+    } while (System.nanoTime() < deadline);
+    throw new AssertionError("Not every RabbitMQ partition received an event: " + latest);
+  }
+
+  private Map<Integer, Long> partitionPublishCounts() {
+    JsonNode queues = body(assertStatus(rabbitManagement.get("/api/queues/%2F"), 200));
+    Map<Integer, Long> counts = new HashMap<>();
+    for (JsonNode queue : queues) {
+      String name = queue.get("name").asString();
+      if (name.startsWith(PARTITION_QUEUE_PREFIX)) {
+        int partition = Integer.parseInt(name.substring(PARTITION_QUEUE_PREFIX.length()));
+        JsonNode stats = queue.get("message_stats");
+        JsonNode published = stats == null ? null : stats.get("publish");
+        counts.put(partition, published == null ? 0L : published.asLong());
+      }
+    }
+    assertThat(counts).hasSize(PARTITION_COUNT);
+    return counts;
   }
 
   private boolean matchesExpectedEvents(JsonNode results) {

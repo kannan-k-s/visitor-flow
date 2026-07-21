@@ -381,8 +381,9 @@ Google `oauth2.client.registration/provider`, `jwt.signing-secret`, `assign.hash
   unknown tenant → 404 (#13); no headers → filter generates an anon, returned in `anon_visitor_id`.
 - **Consumer dedup (repo test):** duplicate `exposed` → `INSERT IGNORE` keeps one row (append-only, no update).
 - Container lifecycle automation via **Testcontainers is deferred**. An opt-in Playwright HTTP E2E
-  profile runs against the live local MySQL/Redis/RabbitMQ stack and waits for broker events before
-  asserting results; the default build remains unit-focused.
+  profile runs against the live local MySQL/Redis/RabbitMQ stack, verifies deterministic traffic across
+  all four RabbitMQ queue partitions, and waits for broker events before asserting results; the default
+  build remains unit-focused.
 
 ## Verification (end-to-end, manual)
 

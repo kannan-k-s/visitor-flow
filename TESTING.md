@@ -86,7 +86,7 @@ set +a
 ./mvnw -pl web -am verify -Pe2e
 ```
 
-Expected result: **13 unit tests + 7 E2E scenarios = 20 tests**, zero failures and errors.
+Expected result: **13 unit tests + 8 E2E scenarios = 21 tests**, zero failures and errors.
 
 The E2E suite covers:
 
@@ -95,6 +95,7 @@ The E2E suite covers:
 - assignment identity generation/linking, deterministic repeat assignment, limits, invalid input, and degradation
 - tracking validation, missing/unknown identity no-op behavior, idempotency, exposure, conversion, and orphan conversion
 - delayed RabbitMQ ingestion into the event table and aggregate results/rates
+- deterministic routing through all four RabbitMQ partition queues
 - RabbitMQ-unavailable `503` behavior and recovery after broker restart
 - results authorization/not-found behavior and final cleanup
 
