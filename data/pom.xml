@@ -10,7 +10,7 @@
 	</parent>
 	<artifactId>data</artifactId>
 	<name>data</name>
-	<description>Shared persistence and domain: entities, tenant-scoped repositories, request context, and MySQL/Redis/Kafka config. Depended on by both planes.</description>
+	<description>Shared persistence and domain: entities, tenant-scoped repositories, request context, and MySQL/Redis/RabbitMQ config. Depended on by both planes.</description>
 
 	<dependencies>
 		<dependency>
@@ -23,13 +23,25 @@
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-kafka</artifactId>
+			<artifactId>spring-boot-starter-cache</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-jackson</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-liquibase</artifactId>
 		</dependency>
-		<!-- Runtime deps to add when wired (see AGENTS.md §1): mysql-connector-j, org.modelmapper:modelmapper -->
+		<dependency>
+			<groupId>com.mysql</groupId>
+			<artifactId>mysql-connector-j</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.modelmapper</groupId>
+			<artifactId>modelmapper</artifactId>
+		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -39,11 +51,6 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-redis-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-kafka-test</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>

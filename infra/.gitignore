@@ -1,0 +1,9 @@
+# Persisted service data lives on the host — never commit it.
+mysql/data/*
+!mysql/data/.gitkeep
+
+# Safety for legacy local data left by the retired broker; no runtime service uses it.
+kafka/
+
+redis/data/*
+!redis/data/.gitkeep

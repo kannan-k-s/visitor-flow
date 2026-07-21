@@ -24,7 +24,7 @@ Two planes with opposite requirements:
   dashboard. OAuth + RBAC.
 
 **Stack:** Spring Boot 4.0.7 · Java 25 · MySQL (source of truth) · Redis (cache) ·
-Kafka (async tracking/streaming) · Liquibase (schema) · Spring Security · Lombok ·
+RabbitMQ via Spring Cloud Stream (async tracking) · Liquibase (schema) · Spring Security · Lombok ·
 ModelMapper (object mapping).
 
 > Stack notes: schema changes go through **Liquibase changelogs**, never
@@ -335,7 +335,7 @@ demo (parent · pom)
 ├── data ──────────  shared persistence + domain; both planes depend on it, it depends on neither
 │   └── ai.visitorflow.demo.data
 │       ├── context/          RequestContext, RequestContextHolder
-│       ├── config/           @Configuration: MappingConfig/ModelMapper, Redis, Kafka, DataSource
+│       ├── config/           @Configuration: MappingConfig/ModelMapper, Redis, DataSource
 │       ├── exception/        domain exceptions + error DTOs
 │       └── <feature>/
 │           ├── model/        JPA entities (plain Long FKs — R8)

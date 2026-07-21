@@ -56,7 +56,7 @@ mvnw.cmd test                # tests
 mvnw.cmd spring-boot:run     # run locally
 ```
 
-Java 25 · Spring Boot 4.0.7 · MySQL · Redis · Kafka · Liquibase · Lombok.
+Java 25 · Spring Boot 4.0.7 · MySQL · Redis · RabbitMQ/Spring Cloud Stream · Liquibase · Lombok.
 Base package `ai.visitorflow.demo`. Schema via **Liquibase changelogs**, never
 `ddl-auto`.
 

@@ -14,7 +14,7 @@ every decision**.
 
 - Low-latency assignment: experiments **split by strategy**, each under a flat deadline (**hash 100 ms · SWRR 200 ms**) → on timeout, return the **default variant** for that group.
 - Two per-experiment strategies — **Hash** (default) and **SWRR** (opt-in) — behind one interface.
-- **Durable, deduplicated three-status tracking** (`assigned`/`exposed`/`converted`) via Kafka; eventual consistency acceptable.
+- **Durable, deduplicated three-status tracking** (`assigned`/`exposed`/`converted`) via RabbitMQ; eventual consistency acceptable.
 - **Multi-tenant** control plane (**Google OAuth + RBAC**); **fully anonymous** data plane.
 - **LLM-generated** variant content, off the hot path.
 - Abuse protection via **visitor-id / IP rate limiting**.
@@ -30,7 +30,7 @@ web ─► admin  ─► data
    └─► visitor ─► data
 ```
 
-- **`data`** — shared persistence + domain: entities, repositories, MySQL/Redis/Kafka access. Both planes depend on it.
+- **`data`** — shared persistence + domain: entities, repositories, and MySQL/Redis access. Both planes depend on it.
 - **`visitor`** — data-plane logic **and its own controllers** (`/assign`, `/track`): assignment (Hash/SWRR), identity resolution, tracking emit, rate limiting, and its filters. Depends on `data`.
 - **`admin`** — control-plane logic **and its own controllers**: experiment config, results, RBAC, and its filters. Depends on `data`.
 - **`web`** — the runnable app: holds `DemoApplication`, the **single filter-hook** that registers/orders the filters from both `admin` and `visitor`, and **authentication** (OAuth login + JWT). Depends on `admin` + `visitor`.
@@ -44,7 +44,7 @@ Assembled into **one deployable now**; the module split follows the plane bounda
  Customer <script> ──GET /{tenant}/v1/assign──►  Rate limiter (Bucket4j+Redis, fail-OPEN)
    (client owns cookies)                            │
                                                     ▼
-                  Assignment Svc ─ emits `assigned` ─► Kafka ──► consumer ──► MySQL
+                  Assignment Svc ─ emits `assigned` ─► RabbitMQ ─► consumer ─► MySQL
                   (fire-and-forget)
                   timeout→default      (partition by visitor_id)   (events+aggregates)
                   Hash | SWRR ▲                    ▲
@@ -207,7 +207,7 @@ Validate request referrer/origin against an experiment-level **`allowed_domains`
 
 ---
 
-## 7. Tracking — three-event funnel (Kafka)
+## 7. Tracking — three-event funnel (RabbitMQ)
 
 Assignment produces a **funnel of three per-visitor statuses**, split by *who is certain of what*:
 
@@ -219,9 +219,15 @@ Assignment produces a **funnel of three per-visitor statuses**, split by *who is
 
 **Why split `assigned` from `exposed`.** `/assign` also fires for prefetch, bots, batched experiments the page never renders, and DOM changes that throw before paint — none of which are real views. Only the client knows a variant was *shown*, so it owns `exposed`. The **conversion-rate denominator is `exposed`, never `assigned`** — that is what keeps the rate trustworthy. `assigned` is retained as a QA/telemetry signal, not a denominator (§8, §14).
 
-- All three **partitioned by `visitor_id`** → per-visitor ordering; **eventual consistency is fine** (dedup makes arrival order irrelevant to counts).
+- All three are **partitioned by numeric `anon_visitor_id`** → per-anonymous-visitor ordering;
+  **eventual consistency is fine** (dedup makes arrival order irrelevant to counts). RabbitMQ does not
+  provide native partitions, so Spring Cloud Stream creates one direct `tracking-events` exchange and
+  four queues. Routing keys `tracking-events-0` through `tracking-events-3` each bind to one queue;
+  the producer hashes `anonVisitorId` to select exactly one of them.
 - **Status-batched; client reports the variant.** One endpoint — `POST /{tenant}/v1/track` with body `{ status: "exposed"|"converted", data: { exp→variant } }` — records that status for the visitor on each listed experiment, with the client **echoing the variant(s)** it received from `/assign` and rendered (only the client knows what was actually shown; stays correct even if config changed after assign). Only `exposed`/`converted` are accepted — `assigned` is server-only. The server records verbatim — it does **not** re-resolve or call the assignment engine (no SWRR tick, no sticky read). Identity is resolved from headers **lookup-only** (no anon get-or-create); a missing identity yields an orphan event. **Trade-off:** the reported variant is spoofable — cross-checked against `assigned` (§14).
-- **`assigned` is emitted fire-and-forget** on the hot path (bounded local buffer, drop-and-count if Kafka is unavailable) → tracking never blocks or fails a render (§6.6). Client calls (`exposed`, `converted`) are separate, off the render path entirely.
+- **`assigned` is emitted best-effort** on the hot path; a RabbitMQ send failure is logged and swallowed,
+  so tracking never fails a render (§6.6). Client `exposed`/`converted` calls are separate and use the
+  durable binding serially; broker failure returns `503` so the client can retry.
 - A **`consumer`** dedups and writes MySQL (`events` + aggregates).
 - **Idempotency:** unique key `(tenant, experiment, visitor, status)`; `visitor` is the **context anon** (per-device, §6.1), so multiple devices are already distinct rows. One anon maps to **one variant per experiment** — an invariant, not a coincidence (deterministic hash; SWRR/sticky persist) — so `variant` is deliberately *not* in the key. The only way it would break is a live allocation change, which §14 forbids and the assigned-vs-reported variant check (§14) would flag rather than silently double-count. Consumer upserts, so a duplicate `exposed`/`converted` never double-counts (→ unique visitors; repeat conversions collapse to one).
 - A `converted` with **no matching `exposed`** is a data-quality signal (converted but never exposed) — counted separately, not in the rate. No attribution window yet — a late conversion still counts (§15).
@@ -259,7 +265,7 @@ Per experiment, per variant: **assigned, exposed, converted, and conversion rate
 
 - **MySQL = source of truth:** tenants, users, experiments, events + aggregates, sticky assignments. Snapshots + binlog for DR.
 - **Redis = cache / ephemeral:** config cache, SWRR counters (AOF-persisted), rate-limit buckets — all rebuildable or operational.
-- **Kafka = durable event pipe** (tracking → MySQL).
+- **RabbitMQ = durable event pipe** (tracking → four partition queues → MySQL).
 - **Config cache in Redis, never in-process memory** — all nodes read one consistent view (in-memory caches diverge across a cluster). MySQL is the config source of truth; console writes update MySQL + refresh Redis; `/assign` reads Redis (on miss/failure it fails to default).
 - Redis counters are reconstructable from MySQL events; the dashboard reads MySQL.
 
@@ -277,7 +283,7 @@ Per experiment, per variant: **assigned, exposed, converted, and conversion rate
 ## 13. Scale
 
 - **Assignment (reads):** massive, cheap — hash over Redis-cached config; stateless nodes scale **horizontally + linearly**.
-- **Tracking (writes):** three streams by volume — `assigned` (every `/assign`, highest) ≥ `exposed` (only renders) ≥ `converted` (only conversions); all absorbed by Kafka, deduped by the consumer to unique-visitor rows, batched to MySQL. Write scaling decoupled from reads. `assigned` is the hot stream — **sampling or an aggregate-only counter** is a later lever if its volume dominates.
+- **Tracking (writes):** three streams by volume — `assigned` (every `/assign`, highest) ≥ `exposed` (only renders) ≥ `converted` (only conversions); all flow through RabbitMQ's four partition queues and are deduped by the consumer to unique-visitor rows in MySQL. Write scaling is decoupled from reads. `assigned` is the hot stream — **sampling or an aggregate-only counter** is a later lever if its volume dominates.
 - **Results / config:** low-volume / read-mostly.
 - **Multi-experiment assign:** hash experiments are CPU-only (free); SWRR/sticky each cost a Redis round-trip — **sequential now** (cap 20 ≈ 15–20 ms with healthy Redis), **pipeline later** to flatten the p99 tail and raise the cap.
 - **Watch:** SWRR counter hot key (opt-in only); sticky-store growth; tracking throughput (partition `events` by tenant/time).
@@ -350,7 +356,7 @@ Redis keys (rebuildable / ephemeral): `cfg:{tenant}:{exp}` · `link:{tenant}:vis
 | D-5 | SWRR counter via single Redis Lua script | Atomic RMW, race-free across nodes. |
 | D-6 | Fail-to-**default variant** on timeout | Known-safe baseline; never an untested variant during an outage. |
 | D-7 | Config cache in Redis, not in-memory | One consistent view across nodes. |
-| D-8 | Tracking via Kafka, partitioned by visitor_id | Per-visitor ordering; eventual consistency; decouples writes. |
+| D-8 | Tracking via one RabbitMQ direct exchange and four queues, partitioned by anon visitor id | Per-visitor ordering without native broker partitions; eventual consistency; decouples writes. |
 | D-9 | Bucket4j token bucket, fail-open | Rate limiting should reject excess; must never break a page. |
 | D-10 | LLM at config time, cached, human-reviewed | Slow/costly/flaky — off the hot path; generate once, serve millions. |
 | D-11 | Atomic anon get-or-create via `SETNX` (visitor_id present) | One canonical anon under concurrency; the no-shared-id first-call race is accepted as rare/self-correcting. |

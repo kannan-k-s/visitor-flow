@@ -1,0 +1,73 @@
+databaseChangeLog:
+  - changeSet:
+      id: 003-visitors-identity-links
+      author: demo
+      changes:
+        - createTable:
+            tableName: visitors
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: tenant_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(6)
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: visitors
+            indexName: ix_visitors_tenant
+            columns:
+              - column:
+                  name: tenant_id
+        - createTable:
+            tableName: identity_links
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: tenant_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: visitor_id
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: anon_visitor_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(6)
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: identity_links
+            columnNames: tenant_id, visitor_id
+            constraintName: uk_identity_links_tenant_visitor
+        - createIndex:
+            tableName: identity_links
+            indexName: ix_identity_links_tenant_anon
+            columns:
+              - column:
+                  name: tenant_id
+              - column:
+                  name: anon_visitor_id

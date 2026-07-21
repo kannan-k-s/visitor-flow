@@ -1,0 +1,1 @@
+# Keeps infra/redis/data/ in git. Redis persists dump.rdb here (gitignored).

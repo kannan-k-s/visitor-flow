@@ -1,0 +1,1 @@
+# Keeps infra/mysql/data/ in git. MySQL persists its files here (gitignored).

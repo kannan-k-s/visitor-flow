@@ -1,0 +1,115 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-experiments-variants
+      author: demo
+      changes:
+        - createTable:
+            tableName: experiments
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: tenant_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(160)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: strategy
+                  type: VARCHAR(16)
+                  defaultValue: hash
+                  constraints:
+                    nullable: false
+              - column:
+                  name: sticky_bucketing
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: allowed_domains
+                  type: VARCHAR(1000)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(6)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP(6)
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: experiments
+            columnNames: tenant_id, name
+            constraintName: uk_experiments_tenant_name
+        - createIndex:
+            tableName: experiments
+            indexName: ix_experiments_tenant
+            columns:
+              - column:
+                  name: tenant_id
+        - createTable:
+            tableName: variants
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: experiment_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: tenant_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: is_default
+                  type: BOOLEAN
+                  constraints:
+                    nullable: false
+              - column:
+                  name: content
+                  type: TEXT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: alloc_pct
+                  type: DECIMAL(5,2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(6)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP(6)
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: variants
+            indexName: ix_variants_tenant_experiment
+            columns:
+              - column:
+                  name: tenant_id
+              - column:
+                  name: experiment_id
+              - column:
+                  name: id
