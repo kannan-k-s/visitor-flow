@@ -1,0 +1,67 @@
+databaseChangeLog:
+  - changeSet:
+      id: 004-events
+      author: demo
+      changes:
+        - createTable:
+            tableName: events
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: tenant_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: experiment_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: variant_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: anon_visitor_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(16)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: occurred_at
+                  type: TIMESTAMP(6)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: degraded
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: events
+            columnNames: tenant_id, experiment_id, anon_visitor_id, status
+            constraintName: uk_events_dedup
+        - createIndex:
+            tableName: events
+            indexName: ix_events_tenant_experiment_variant_status
+            columns:
+              - column:
+                  name: tenant_id
+              - column:
+                  name: experiment_id
+              - column:
+                  name: variant_id
+              - column:
+                  name: status

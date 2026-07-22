@@ -1,0 +1,19 @@
+package ai.visitorflow.demo.visitor.tracking.dto.response;
+
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.AccessLevel;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+@Getter
+@Builder
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
+@AllArgsConstructor(access = AccessLevel.PRIVATE)
+public class TrackResponse {
+  @JsonProperty("accepted")
+  @JsonFormat(shape = JsonFormat.Shape.STRING)
+  private int accepted;
+}

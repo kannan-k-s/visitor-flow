@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Experiments · Experiment Admin</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Experiment Admin <small data-tenant-label></small></div>
+    <nav class="nav">
+      <a data-nav-experiments class="active">Experiments</a>
+      <a data-nav-analytics>Analytics</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <h1 class="page-title">Experiments</h1>
+    <div class="banner error" data-banner role="alert"></div>
+    <div class="banner ok" data-notice role="status"></div>
+
+    <section class="card">
+      <h2 data-form-title>Create experiment</h2>
+      <form data-create-form>
+        <div class="field-inline">
+          <div class="field">
+            <label for="exp-name">Name</label>
+            <input id="exp-name" name="name" maxlength="160" placeholder="Checkout button test" required />
+          </div>
+          <div class="field" style="max-width:180px">
+            <label for="exp-strategy">Strategy</label>
+            <select id="exp-strategy" name="strategy">
+              <option value="hash">hash</option>
+              <option value="swrr">swrr</option>
+            </select>
+          </div>
+        </div>
+
+        <label>Variants</label>
+        <div class="variant-rows" data-variant-rows></div>
+        <div class="btn-row" style="margin-bottom:12px">
+          <button type="button" class="secondary" data-add-variant>+ Add variant</button>
+          <span class="alloc-total" data-alloc-total></span>
+        </div>
+
+        <div class="btn-row">
+          <button type="submit" data-submit>Create experiment</button>
+          <button type="button" class="ghost" data-cancel-edit hidden>Cancel</button>
+          <span class="hint">Two or more variants required. The backend validates allocation rules.</span>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>All experiments</h2>
+      <div data-list>
+        <div class="empty">Loading…</div>
+      </div>
+      <div class="pager" data-pager hidden>
+        <button class="ghost" data-prev>← Prev</button>
+        <span data-page-info></span>
+        <button class="ghost" data-next>Next →</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/assets/api.js"></script>
+  <script src="/assets/experiments.js"></script>
+</body>
+</html>

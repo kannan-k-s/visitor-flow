@@ -1,0 +1,26 @@
+databaseChangeLog:
+  - changeSet:
+      id: 005-seed-demo
+      author: demo
+      changes:
+        - insert:
+            tableName: tenants
+            columns:
+              - column:
+                  name: name
+                  value: demo
+              - column:
+                  name: created_at
+                  valueDate: now()
+        - insert:
+            tableName: users
+            columns:
+              - column:
+                  name: tenant_id
+                  valueComputed: (SELECT id FROM tenants WHERE name = 'demo')
+              - column:
+                  name: email
+                  value: admin@example.com
+              - column:
+                  name: created_at
+                  valueDate: now()

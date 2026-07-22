@@ -1,0 +1,668 @@
+package ai.visitorflow.demo.e2e;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import ai.visitorflow.demo.data.tenant.model.TenantEntity;
+import ai.visitorflow.demo.data.tenant.model.UserEntity;
+import ai.visitorflow.demo.data.tenant.repository.TenantRepository;
+import ai.visitorflow.demo.data.tenant.repository.UserRepository;
+import ai.visitorflow.demo.web.security.JwtService;
+import com.microsoft.playwright.APIRequest;
+import com.microsoft.playwright.APIRequestContext;
+import com.microsoft.playwright.APIResponse;
+import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.options.RequestOptions;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.TestMethodOrder;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+  "spring.data.redis.connect-timeout=2s", "spring.data.redis.timeout=2s"
+})
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(OrderAnnotation.class)
+class ExperimentApiE2ETest {
+  private static final String TENANT = "demo";
+  private static final String ADMIN_EMAIL = "admin@example.com";
+  private static final Duration INITIAL_EVENT_DELAY = Duration.ofSeconds(1);
+  private static final Duration EVENT_TIMEOUT = Duration.ofSeconds(10);
+  private static final Duration EVENT_POLL_DELAY = Duration.ofMillis(250);
+  private static final Duration BROKER_RECOVERY_TIMEOUT = Duration.ofSeconds(30);
+  private static final String PARTITION_QUEUE_PREFIX = "tracking-events.tracking-events-v0-";
+  private static final int PARTITION_COUNT = 4;
+
+  @LocalServerPort
+  private int port;
+
+  @Autowired
+  private JwtService jwtService;
+
+  @Autowired
+  private TenantRepository tenantRepository;
+
+  @Autowired
+  private UserRepository userRepository;
+
+  @Autowired
+  private ObjectMapper objectMapper;
+
+  private Playwright playwright;
+  private APIRequestContext anonymous;
+  private APIRequestContext authenticated;
+  private APIRequestContext wrongTenant;
+  private APIRequestContext rabbitManagement;
+  private Long experimentId;
+  private Long firstVariantId;
+  private Long secondVariantId;
+  private Long primaryAnonId;
+  private Long primaryVariantId;
+  private Long linkedAnonId;
+  private Long linkedVariantId;
+  private final Map<Long, Integer> expectedAssigned = new HashMap<>();
+  private final Map<Long, Integer> expectedExposed = new HashMap<>();
+  private final Map<Long, Integer> expectedConverted = new HashMap<>();
+  private String experimentName;
+  private String visitorId;
+
+  @BeforeAll
+  void setUp() {
+    TenantEntity tenant = tenantRepository.findByName(TENANT).orElseThrow();
+    UserEntity user = userRepository.findByEmailAndTenantId(ADMIN_EMAIL, tenant.getId()).orElseThrow();
+    String session = jwtService.mint(user.getId(), tenant.getId(), user.getEmail());
+    String mismatchedSession = jwtService.mint(user.getId(), tenant.getId() + 1000, user.getEmail());
+    playwright = Playwright.create();
+    anonymous = context(Map.of());
+    authenticated = context(Map.of("Cookie", "session=" + session));
+    wrongTenant = context(Map.of("Cookie", "session=" + mismatchedSession));
+    rabbitManagement = rabbitManagementContext();
+    experimentName = "playwright-e2e-" + UUID.randomUUID();
+    visitorId = "client-visitor-" + UUID.randomUUID();
+  }
+
+  @AfterAll
+  void tearDown() {
+    if (experimentId != null && authenticated != null) {
+      authenticated.delete("/" + TENANT + "/v1/experiments/" + experimentId);
+    }
+    if (wrongTenant != null) {
+      wrongTenant.dispose();
+    }
+    if (rabbitManagement != null) {
+      rabbitManagement.dispose();
+    }
+    if (authenticated != null) {
+      authenticated.dispose();
+    }
+    if (anonymous != null) {
+      anonymous.dispose();
+    }
+    if (playwright != null) {
+      playwright.close();
+    }
+  }
+
+  @Test
+  @Order(1)
+  void coversHealthAuthenticationTenantIsolationAndOAuthState() {
+    assertStatus(anonymous.get("/actuator/health"), 200);
+    assertError(anonymous.get("/" + TENANT + "/v1/experiments"), 401, "unauthorized");
+    assertError(wrongTenant.get("/" + TENANT + "/v1/experiments"), 403, "forbidden");
+    assertError(authenticated.get("/missing/v1/experiments"), 404, "not_found");
+
+    APIResponse login = assertStatus(anonymous.get("/" + TENANT + "/v1/auth/login"), 302);
+    String location = login.headers().get("location");
+    assertThat(location).contains("state=eyJ");
+    assertThat(location).contains("/login/oauth2/code/google");
+    assertThat(location).doesNotContain("tenant=");
+  }
+
+  @Test
+  @Order(2)
+  void coversExperimentCreateReadListUpdateAndValidationApis() {
+    APIResponse create = assertStatus(authenticated.post(
+      experimentsPath(), json(experimentRequest(experimentName, "hash", 50, 50, false, null))
+    ), 200);
+    JsonNode created = body(create);
+    experimentId = stringLong(created.get("id"));
+    firstVariantId = stringLong(created.get("variants").get(0).get("id"));
+    secondVariantId = stringLong(created.get("variants").get(1).get("id"));
+    assertThat(created.get("name").asString()).isEqualTo(experimentName);
+    assertThat(stringDecimal(created.get("variants").get(0).get("alloc_pct")))
+      .isEqualByComparingTo(new BigDecimal("50"));
+
+    assertError(authenticated.post(
+      experimentsPath(), json(experimentRequest(experimentName, "hash", 50, 50, false, null))
+    ), 400, "invalid_request");
+    assertError(authenticated.post(
+      experimentsPath(), json(experimentRequest(experimentName, "hash", 90, 9, false, null))
+    ), 400, "invalid_request");
+    assertError(authenticated.post(
+      experimentsPath(), json(experimentRequest(experimentName, "swrr", 50, 50, false, null))
+    ), 400, "invalid_request");
+    assertError(authenticated.post(
+      experimentsPath(), json(experimentRequest(experimentName, "unknown", 50, 50, false, null))
+    ), 400, "invalid_request");
+    assertError(authenticated.post(
+      experimentsPath(), json(experimentRequest(experimentName, "hash", 50, 50, true, 123L))
+    ), 400, "invalid_request");
+
+    JsonNode fetched = body(assertStatus(authenticated.get(experimentPath()), 200));
+    assertThat(stringLong(fetched.get("id"))).isEqualTo(experimentId);
+    JsonNode page = body(assertStatus(authenticated.get(experimentsPath()), 200));
+    assertThat(containsExperiment(page.get("items"), experimentId)).isTrue();
+    assertThat(stringInt(page.get("page"))).isZero();
+    assertThat(stringInt(page.get("size"))).isPositive();
+    assertThat(stringLong(page.get("total_elements"))).isPositive();
+    assertThat(stringInt(page.get("total_pages"))).isPositive();
+    assertError(authenticated.get(experimentsPath() + "/9223372036854775807"), 404, "not_found");
+
+    APIResponse update = assertStatus(authenticated.put(
+      experimentPath(), json(updateRequest(60, 40, firstVariantId, secondVariantId))
+    ), 200);
+    JsonNode updated = body(update);
+    assertThat(stringLong(updated.get("variants").get(0).get("id"))).isEqualTo(firstVariantId);
+    assertThat(stringLong(updated.get("variants").get(1).get("id"))).isEqualTo(secondVariantId);
+
+    assertError(authenticated.put(
+      experimentPath(), json(updateRequest(50, 50, firstVariantId, Long.MAX_VALUE))
+    ), 400, "invalid_request");
+    assertError(authenticated.put(
+      experimentPath(), json(updateRequest(50, 50, firstVariantId, firstVariantId))
+    ), 400, "invalid_request");
+  }
+
+  @Test
+  @Order(3)
+  void coversAssignmentApiIdentityDegradationAndValidation() {
+    String path = "/" + TENANT + "/v1/assign";
+    assertStatus(anonymous.get(path), 400);
+    assertError(anonymous.get(path + "?experiments=-1"), 400, "invalid_request");
+    assertError(anonymous.get(path + "?experiments=1", headers("X-Anon-Id", "bad")), 400, "invalid_request");
+    assertError(anonymous.get(path + oversizedExperimentQuery()), 400, "invalid_request");
+    assertError(anonymous.get("/missing/v1/assign?experiments=1"), 404, "not_found");
+
+    JsonNode unknown = body(assertStatus(anonymous.get(path + "?experiments=9223372036854775807"), 200));
+    assertThat(unknown.get("degraded").asBoolean()).isTrue();
+    assertThat(unknown.get("assignments").size()).isZero();
+    stringLong(unknown.get("anon_visitor_id"));
+
+    JsonNode assigned = body(assertStatus(anonymous.get(path + "?experiments=" + experimentId), 200));
+    primaryAnonId = stringLong(assigned.get("anon_visitor_id"));
+    JsonNode assignedVariant = assigned.get("assignments").get(String.valueOf(experimentId));
+    primaryVariantId = stringLong(assignedVariant.get("id"));
+    assertThat(assignedVariant.get("content").asString()).isEqualTo(expectedContent(primaryVariantId));
+    assertThat(assigned.get("degraded").asBoolean()).isFalse();
+    expectedAssigned.merge(primaryVariantId, 1, Integer::sum);
+
+    JsonNode repeated = body(assertStatus(anonymous.get(
+      path + "?experiments=" + experimentId, headers("X-Anon-Id", String.valueOf(primaryAnonId))
+    ), 200));
+    assertThat(stringLong(repeated.get("anon_visitor_id"))).isEqualTo(primaryAnonId);
+    JsonNode repeatedVariant = repeated.get("assignments").get(String.valueOf(experimentId));
+    assertThat(stringLong(repeatedVariant.get("id"))).isEqualTo(primaryVariantId);
+    assertThat(repeatedVariant.get("content").asString()).isEqualTo(expectedContent(primaryVariantId));
+
+    JsonNode linked = body(assertStatus(anonymous.get(
+      path + "?experiments=" + experimentId, headers("X-Visitor-Id", visitorId)
+    ), 200));
+    linkedAnonId = stringLong(linked.get("anon_visitor_id"));
+    JsonNode linkedVariant = linked.get("assignments").get(String.valueOf(experimentId));
+    linkedVariantId = stringLong(linkedVariant.get("id"));
+    assertThat(linkedVariant.get("content").asString()).isEqualTo(expectedContent(linkedVariantId));
+    assertThat(linkedAnonId).isNotEqualTo(primaryAnonId);
+    expectedAssigned.merge(linkedVariantId, 1, Integer::sum);
+
+    JsonNode linkedAgain = body(assertStatus(anonymous.get(
+      path + "?experiments=" + experimentId, headers("X-Visitor-Id", visitorId)
+    ), 200));
+    assertThat(stringLong(linkedAgain.get("anon_visitor_id"))).isEqualTo(linkedAnonId);
+    assertThat(stringLong(linkedAgain.get("assignments").get(
+      String.valueOf(experimentId)
+    ).get("id"))).isEqualTo(linkedVariantId);
+  }
+
+  @Test
+  @Order(4)
+  void coversTrackingApiValidationIdentityIdempotencyAndOrphans() {
+    String path = "/" + TENANT + "/v1/track";
+    Map<String, Object> exposed = trackingRequest("exposed", Map.of(experimentId, primaryVariantId));
+    JsonNode noIdentity = body(assertStatus(anonymous.post(path, json(exposed)), 200));
+    assertThat(stringInt(noIdentity.get("accepted"))).isZero();
+    JsonNode unknownVisitor = body(assertStatus(anonymous.post(
+      path, json(exposed).setHeader("X-Visitor-Id", "unknown-" + UUID.randomUUID())
+    ), 200));
+    assertThat(stringInt(unknownVisitor.get("accepted"))).isZero();
+
+    assertError(anonymous.post(
+      path, json(trackingRequest("assigned", Map.of(experimentId, primaryVariantId)))
+    ), 400, "invalid_request");
+    assertError(anonymous.post(
+      path, json(trackingRequest("unknown", Map.of(experimentId, primaryVariantId)))
+    ), 400, "invalid_request");
+    assertError(anonymous.post(
+      path, json(trackingRequest("exposed", Map.of()))
+    ), 400, "invalid_request");
+    assertError(anonymous.post(
+      path, json(trackingRequest("exposed", oversizedTrackingData()))
+    ), 400, "invalid_request");
+    assertError(anonymous.post(
+      path, json(exposed).setHeader("X-Anon-Id", "invalid")
+    ), 400, "invalid_request");
+    assertError(anonymous.post(
+      "/missing/v1/track", json(exposed).setHeader("X-Anon-Id", String.valueOf(primaryAnonId))
+    ), 404, "not_found");
+
+    RequestOptions primary = json(exposed).setHeader("X-Anon-Id", String.valueOf(primaryAnonId));
+    assertAccepted(anonymous.post(path, primary), 1);
+    assertAccepted(anonymous.post(path, primary), 1);
+    assertAccepted(anonymous.post(
+      path, json(trackingRequest("converted", Map.of(experimentId, primaryVariantId)))
+        .setHeader("X-Anon-Id", String.valueOf(primaryAnonId))
+    ), 1);
+    expectedExposed.merge(primaryVariantId, 1, Integer::sum);
+    expectedConverted.merge(primaryVariantId, 1, Integer::sum);
+
+    assertAccepted(anonymous.post(
+      path, json(trackingRequest("exposed", Map.of(experimentId, linkedVariantId)))
+        .setHeader("X-Visitor-Id", visitorId)
+    ), 1);
+    expectedExposed.merge(linkedVariantId, 1, Integer::sum);
+
+    assertAccepted(anonymous.post(
+      path, json(trackingRequest("converted", Map.of(experimentId, primaryVariantId)))
+        .setHeader("X-Anon-Id", String.valueOf(Long.MAX_VALUE - 1))
+    ), 1);
+  }
+
+  @Test
+  @Order(5)
+  void coversAllRabbitPartitionsAndEventIngestion() throws InterruptedException {
+    Map<Integer, Long> initialPublishCounts = partitionPublishCounts();
+    String path = "/" + TENANT + "/v1/track";
+    Map<String, Object> event = trackingRequest("exposed", Map.of(experimentId, primaryVariantId));
+    for (int partition = 0; partition < PARTITION_COUNT; partition++) {
+      long anonVisitorId = 100_000L + partition;
+      assertThat(Math.floorMod(Long.hashCode(anonVisitorId), PARTITION_COUNT)).isEqualTo(partition);
+      assertAccepted(anonymous.post(
+        path, json(event).setHeader("X-Anon-Id", String.valueOf(anonVisitorId))
+      ), 1);
+    }
+    expectedExposed.merge(primaryVariantId, PARTITION_COUNT, Integer::sum);
+    awaitAllPartitionsPublished(initialPublishCounts);
+    JsonNode results = awaitResults();
+    int exposed = 0;
+    for (JsonNode variant : results.get("variants")) {
+      exposed += stringInt(variant.get("exposed"));
+    }
+    assertThat(exposed).isEqualTo(expectedExposed.values().stream().mapToInt(Integer::intValue).sum());
+  }
+
+  @Test
+  @Order(6)
+  void coversEventuallyConsistentResultsApiBackedByRabbitEvents() throws InterruptedException {
+    assertError(anonymous.get(experimentPath() + "/results"), 401, "unauthorized");
+    assertError(authenticated.get(
+      experimentsPath() + "/9223372036854775807/results"
+    ), 404, "not_found");
+
+    Thread.sleep(INITIAL_EVENT_DELAY.toMillis());
+    JsonNode results = awaitResults();
+    assertThat(stringLong(results.get("experiment_id"))).isEqualTo(experimentId);
+    assertThat(stringLong(results.get("orphan_converted"))).isEqualTo(1);
+    for (JsonNode variant : results.get("variants")) {
+      Long variantId = stringLong(variant.get("variant_id"));
+      int assigned = expectedAssigned.getOrDefault(variantId, 0);
+      int exposed = expectedExposed.getOrDefault(variantId, 0);
+      int converted = expectedConverted.getOrDefault(variantId, 0);
+      assertThat(stringInt(variant.get("assigned"))).isEqualTo(assigned);
+      assertThat(stringInt(variant.get("exposed"))).isEqualTo(exposed);
+      assertThat(stringInt(variant.get("converted"))).isEqualTo(converted);
+      assertThat(stringDecimal(variant.get("conversion_rate")))
+        .isEqualByComparingTo(rate(converted, exposed));
+    }
+  }
+
+  @Test
+  @Order(7)
+  void coversTrackingUnavailableAndBrokerRecovery() throws Exception {
+    String path = "/" + TENANT + "/v1/track";
+    Map<String, Object> event = trackingRequest("exposed", Map.of(experimentId, primaryVariantId));
+    dockerCompose("stop", "rabbitmq");
+    try {
+      assertError(anonymous.post(
+        path, json(event).setHeader("X-Anon-Id", String.valueOf(primaryAnonId))
+      ), 503, "tracking_unavailable");
+    } finally {
+      dockerCompose("start", "rabbitmq");
+      awaitRabbitHealth();
+    }
+    awaitTrackingRecovery(path, event);
+  }
+
+  @Test
+  @Order(8)
+  void coversPostTrafficUpdateAndDeleteApi() {
+    JsonNode updated = body(assertStatus(authenticated.put(
+      experimentPath(), json(updateRequest(55, 45, firstVariantId, secondVariantId))
+    ), 200));
+    assertThat(stringLong(updated.get("variants").get(0).get("id"))).isEqualTo(firstVariantId);
+    assertThat(stringLong(updated.get("variants").get(1).get("id"))).isEqualTo(secondVariantId);
+    assertThat(updated.has("analytics_warning")).isFalse();
+
+    JsonNode deleted = body(assertStatus(authenticated.delete(experimentPath()), 200));
+    assertThat(stringLong(deleted.get("experiment_id"))).isEqualTo(experimentId);
+    assertThat(deleted.get("deleted").asBoolean()).isTrue();
+    assertError(authenticated.get(experimentPath()), 404, "not_found");
+    assertError(authenticated.get(experimentPath() + "/results"), 404, "not_found");
+    assertError(authenticated.delete(experimentPath()), 404, "not_found");
+    JsonNode page = body(assertStatus(authenticated.get(experimentsPath()), 200));
+    assertThat(containsExperiment(page.get("items"), experimentId)).isFalse();
+    experimentId = null;
+  }
+
+  private APIRequestContext context(Map<String, String> headers) {
+    return playwright.request().newContext(new APIRequest.NewContextOptions()
+      .setBaseURL("http://localhost:" + port)
+      .setExtraHTTPHeaders(headers)
+      .setMaxRedirects(0)
+      .setTimeout(15_000));
+  }
+
+  private APIRequestContext rabbitManagementContext() {
+    String password = System.getenv("RABBITMQ_PASSWORD");
+    assertThat(password).as("RABBITMQ_PASSWORD must be loaded from .env").isNotBlank();
+    String credentials = Base64.getEncoder().encodeToString(
+      ("root:" + password).getBytes(StandardCharsets.UTF_8)
+    );
+    return playwright.request().newContext(new APIRequest.NewContextOptions()
+      .setBaseURL("http://localhost:15672")
+      .setExtraHTTPHeaders(Map.of("Authorization", "Basic " + credentials))
+      .setTimeout(15_000));
+  }
+
+  private RequestOptions json(Map<String, ?> data) {
+    return RequestOptions.create().setData(data);
+  }
+
+  private RequestOptions headers(String name, String value) {
+    return RequestOptions.create().setHeader(name, value);
+  }
+
+  private APIResponse assertStatus(APIResponse response, int status) {
+    assertThat(response.status()).as(response.text()).isEqualTo(status);
+    return response;
+  }
+
+  private void assertError(APIResponse response, int status, String code) {
+    JsonNode error = body(assertStatus(response, status));
+    assertThat(error.get("code").asString()).isEqualTo(code);
+    assertThat(error.get("message").asString()).isNotBlank();
+  }
+
+  private void assertAccepted(APIResponse response, int accepted) {
+    assertThat(stringInt(body(assertStatus(response, 200)).get("accepted"))).isEqualTo(accepted);
+  }
+
+  private JsonNode body(APIResponse response) {
+    try {
+      return objectMapper.readTree(response.text());
+    } catch (Exception exception) {
+      throw new AssertionError("Response was not valid JSON: " + response.text(), exception);
+    }
+  }
+
+  private JsonNode awaitResults() throws InterruptedException {
+    long deadline = System.nanoTime() + EVENT_TIMEOUT.toNanos();
+    JsonNode latest = null;
+    do {
+      latest = body(assertStatus(authenticated.get(experimentPath() + "/results"), 200));
+      if (matchesExpectedEvents(latest)) {
+        return latest;
+      }
+      Thread.sleep(EVENT_POLL_DELAY.toMillis());
+    } while (System.nanoTime() < deadline);
+    throw new AssertionError("RabbitMQ events did not reach results before timeout: " + latest);
+  }
+
+  private void awaitTrackingRecovery(String path, Map<String, Object> event) throws InterruptedException {
+    long deadline = System.nanoTime() + BROKER_RECOVERY_TIMEOUT.toNanos();
+    APIResponse latest;
+    do {
+      latest = anonymous.post(
+        path, json(event).setHeader("X-Anon-Id", String.valueOf(primaryAnonId))
+      );
+      if (latest.status() == 200) {
+        assertAccepted(latest, 1);
+        return;
+      }
+      assertError(latest, 503, "tracking_unavailable");
+      Thread.sleep(EVENT_POLL_DELAY.toMillis());
+    } while (System.nanoTime() < deadline);
+    throw new AssertionError("Tracking did not recover after RabbitMQ restarted");
+  }
+
+  private void awaitAllPartitionsPublished(Map<Integer, Long> initialCounts) throws InterruptedException {
+    long deadline = System.nanoTime() + EVENT_TIMEOUT.toNanos();
+    Map<Integer, Long> latest = Map.of();
+    do {
+      latest = partitionPublishCounts();
+      boolean allAdvanced = true;
+      for (int partition = 0; partition < PARTITION_COUNT; partition++) {
+        if (latest.getOrDefault(partition, 0L) <= initialCounts.getOrDefault(partition, 0L)) {
+          allAdvanced = false;
+          break;
+        }
+      }
+      if (allAdvanced) {
+        return;
+      }
+      Thread.sleep(EVENT_POLL_DELAY.toMillis());
+    } while (System.nanoTime() < deadline);
+    throw new AssertionError("Not every RabbitMQ partition received an event: " + latest);
+  }
+
+  private Map<Integer, Long> partitionPublishCounts() {
+    JsonNode queues = body(assertStatus(rabbitManagement.get("/api/queues/%2F"), 200));
+    Map<Integer, Long> counts = new HashMap<>();
+    for (JsonNode queue : queues) {
+      String name = queue.get("name").asString();
+      if (name.startsWith(PARTITION_QUEUE_PREFIX)) {
+        int partition = Integer.parseInt(name.substring(PARTITION_QUEUE_PREFIX.length()));
+        JsonNode stats = queue.get("message_stats");
+        JsonNode published = stats == null ? null : stats.get("publish");
+        counts.put(partition, published == null ? 0L : published.longValue());
+      }
+    }
+    assertThat(counts).hasSize(PARTITION_COUNT);
+    return counts;
+  }
+
+  private boolean matchesExpectedEvents(JsonNode results) {
+    if (stringLong(results.get("orphan_converted")) != 1) {
+      return false;
+    }
+    int assigned = 0;
+    int exposed = 0;
+    int converted = 0;
+    for (JsonNode variant : results.get("variants")) {
+      assigned += stringInt(variant.get("assigned"));
+      exposed += stringInt(variant.get("exposed"));
+      converted += stringInt(variant.get("converted"));
+    }
+    return assigned == expectedAssigned.values().stream().mapToInt(Integer::intValue).sum()
+      && exposed == expectedExposed.values().stream().mapToInt(Integer::intValue).sum()
+      && converted == expectedConverted.values().stream().mapToInt(Integer::intValue).sum();
+  }
+
+  private Map<String, Object> experimentRequest(
+    String name, String strategy, int firstAllocation, int secondAllocation,
+    boolean bothDefault, Long suppliedId
+  ) {
+    return Map.of(
+      "name", name,
+      "strategy", strategy,
+      "variants", List.of(
+        variant(suppliedId, "control", firstAllocation, true),
+        variant(null, "treatment", secondAllocation, bothDefault)
+      )
+    );
+  }
+
+  private Map<String, Object> updateRequest(
+    int firstAllocation, int secondAllocation, Long firstId, Long secondId
+  ) {
+    return Map.of(
+      "name", experimentName,
+      "strategy", "hash",
+      "variants", List.of(
+        variant(firstId, "control-updated", firstAllocation, true),
+        variant(secondId, "treatment-updated", secondAllocation, false)
+      )
+    );
+  }
+
+  private Map<String, Object> variant(
+    Long id, String content, int allocation, boolean defaultVariant
+  ) {
+    Map<String, Object> variant = new LinkedHashMap<>();
+    if (id != null) {
+      variant.put("id", id);
+    }
+    variant.put("content", content);
+    variant.put("alloc_pct", allocation);
+    variant.put("is_default", defaultVariant);
+    return variant;
+  }
+
+  private Map<String, Object> trackingRequest(String status, Map<Long, Long> data) {
+    return Map.of("status", status, "data", data);
+  }
+
+  private Map<Long, Long> oversizedTrackingData() {
+    Map<Long, Long> data = new LinkedHashMap<>();
+    for (long id = 1; id <= 21; id++) {
+      data.put(id, firstVariantId);
+    }
+    return data;
+  }
+
+  private String oversizedExperimentQuery() {
+    List<String> params = new ArrayList<>();
+    for (int id = 1; id <= 21; id++) {
+      params.add("experiments=" + id);
+    }
+    return "?" + String.join("&", params);
+  }
+
+  private boolean containsExperiment(JsonNode items, Long id) {
+    for (JsonNode item : items) {
+      if (stringLong(item.get("id")) == id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private String expectedContent(Long variantId) {
+    return variantId.equals(firstVariantId) ? "control-updated" : "treatment-updated";
+  }
+
+  private long stringLong(JsonNode value) {
+    assertThat(value).isNotNull();
+    assertThat(value.isString()).as(value.toString()).isTrue();
+    return Long.parseLong(value.asString());
+  }
+
+  private int stringInt(JsonNode value) {
+    return Math.toIntExact(stringLong(value));
+  }
+
+  private BigDecimal stringDecimal(JsonNode value) {
+    assertThat(value).isNotNull();
+    assertThat(value.isString()).as(value.toString()).isTrue();
+    return new BigDecimal(value.asString());
+  }
+
+  private BigDecimal rate(int converted, int exposed) {
+    if (exposed == 0) {
+      return BigDecimal.ZERO;
+    }
+    return BigDecimal.valueOf(converted).divide(BigDecimal.valueOf(exposed), 4, RoundingMode.HALF_UP);
+  }
+
+  private void dockerCompose(String... operation) throws Exception {
+    List<String> command = new ArrayList<>(List.of(
+      "docker", "compose", "--env-file", envFile().toString(), "-f", composeFile().toString()
+    ));
+    command.addAll(List.of(operation));
+    run(command);
+  }
+
+  private void awaitRabbitHealth() throws Exception {
+    long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+    do {
+      String status = run(List.of(
+        "docker", "inspect", "--format={{.State.Health.Status}}", "demo-rabbitmq"
+      )).trim();
+      if ("healthy".equals(status)) {
+        return;
+      }
+      Thread.sleep(500);
+    } while (System.nanoTime() < deadline);
+    throw new AssertionError("RabbitMQ did not become healthy after restart");
+  }
+
+  private String run(List<String> command) throws Exception {
+    Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+    if (!process.waitFor(30, TimeUnit.SECONDS)) {
+      process.destroyForcibly();
+      throw new AssertionError("Command timed out: " + command);
+    }
+    String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+    assertThat(process.exitValue()).as(output).isZero();
+    return output;
+  }
+
+  private Path composeFile() {
+    Path fromModule = Path.of("..", "infra", "docker-compose.yml").toAbsolutePath().normalize();
+    if (Files.exists(fromModule)) {
+      return fromModule;
+    }
+    return Path.of("infra", "docker-compose.yml").toAbsolutePath().normalize();
+  }
+
+  private Path envFile() {
+    return composeFile().getParent().getParent().resolve(".env");
+  }
+
+  private String experimentsPath() {
+    return "/" + TENANT + "/v1/experiments";
+  }
+
+  private String experimentPath() {
+    return experimentsPath() + "/" + experimentId;
+  }
+}

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sample client — assignment &amp; tracking</title>
+</head>
+<body>
+<!--
+  Minimal, dependency-free sample of the public data-plane API. Drop this markup on
+  any page (a customer's site, a landing page, a test harness). It requests a variant
+  assignment for one or more experiments, remembers the visitor, and reports
+  exposures/conversions — exactly the two calls a real integration makes.
+
+  Configure the three constants below:
+    API         origin of the assignment service (data plane is anonymous + CORS-enabled
+                for any origin, so cross-origin embeds work; identity travels in headers).
+    TENANT      your tenant name — the {tenant} path segment.
+    EXPERIMENTS experiment ids to assign for.
+  Local demo values: API = "http://localhost", TENANT = "demo", EXPERIMENTS = [1].
+
+  Identity model: a first-party vf_vid (stable visitor id) is generated and sent as
+  X-Visitor-Id; the server returns an anon_visitor_id which is cached as vf_aid and
+  sent back as X-Anon-Id so repeat assignments/tracking stick to the same bucket.
+-->
+<div id="vf">
+  <button onclick="assign()">Assign</button>
+  <button onclick="track('exposed')">Track exposed</button>
+  <button onclick="track('converted')">Track converted</button>
+  <pre id="out"></pre>
+</div>
+<style>
+  #vf{font:14px/1.4 monospace;max-width:640px;margin:1em auto}
+  #vf button{margin-right:.5em;padding:.4em .8em;cursor:pointer}
+  #out{background:#111;color:#0f0;padding:1em;white-space:pre-wrap;border-radius:6px}
+</style>
+<script>
+  const API = "https://YOUR-HTTPS-HOST", TENANT = "your-tenant", EXPERIMENTS = [1, 2];
+  const ck = k => document.cookie.split("; ").find(c => c.startsWith(k + "="))?.split("=")[1];
+  const setck = (k, v) => document.cookie = `${k}=${v};path=/;max-age=31536000;SameSite=Lax`;
+  const vid = () => ck("vf_vid") || (setck("vf_vid", crypto.randomUUID()), ck("vf_vid"));
+  const hdrs = () => { const h = { "X-Visitor-Id": vid() }, a = ck("vf_aid"); if (a) h["X-Anon-Id"] = a; return h; };
+  const log = (t, o) => out.textContent = `${t}\n` + JSON.stringify(o, null, 2) + "\n\n" + out.textContent;
+  let last = {};
+  async function assign() {
+    const r = await fetch(`${API}/${TENANT}/v1/assign?experiments=${EXPERIMENTS.join(",")}`, { headers: hdrs() });
+    const d = await r.json();
+    if (d.anon_visitor_id) setck("vf_aid", d.anon_visitor_id);
+    last = d.assignments || {};
+    log("ASSIGN " + r.status, d);
+  }
+  async function track(status) {
+    const data = {}; for (const e in last) data[e] = Number(last[e].id);
+    if (!Object.keys(data).length) return log("TRACK", "run assign first");
+    const r = await fetch(`${API}/${TENANT}/v1/track`,
+      { method: "POST", headers: { ...hdrs(), "Content-Type": "application/json" }, body: JSON.stringify({ status, data }) });
+    log("TRACK " + r.status, await r.json());
+  }
+</script>
+</body>
+</html>

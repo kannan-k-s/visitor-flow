@@ -14,9 +14,9 @@ behaviour, and the read/write split all derive from it.
 
 ## Status
 
-Design complete; core implementation in progress. This repository currently
-contains the design document, the Spring Boot project skeleton, and the
-engineering conventions the code is built against ([`AGENTS.md`](./AGENTS.md)).
+Design and the core v0 implementation are complete. The implementation covers
+experiment CRUD, deterministic assignment, asynchronous tracking, results,
+tenant-aware OAuth/JWT security, schema migration, caching, and local infra.
 
 ## Architecture at a glance
 
@@ -26,7 +26,7 @@ Two planes with opposite requirements:
   `POST /{tenant}/v1/track`. Latency-critical, **anonymous (no auth)**, rate-limited,
   **fail-safe: never breaks the page** (degrades to the **default variant**).
 - **Control plane** (warm, private, human-facing) — experiment CRUD + results
-  dashboard. OAuth + RBAC.
+  dashboard. Tenant-scoped OAuth/JWT authentication; RBAC is deferred from v0.
 
 Assignment is, by default, a **pure deterministic hash** of visitor identity — no
 I/O on the render path, sticky across restarts with zero storage. See `design.md`
@@ -40,9 +40,9 @@ I/O on the render path, sticky across restarts with zero storage. See `design.md
 | Framework | Spring Boot 4.0.7 |
 | Source of truth | MySQL |
 | Cache / counters | Redis |
-| Async / streaming | Kafka |
+| Async messaging | RabbitMQ via Spring Cloud Stream (4 partitions) |
 | Schema migrations | Liquibase |
-| Auth | Google OAuth2 + RBAC (control plane); data plane anonymous |
+| Auth | Google OAuth2 + tenant-scoped JWT (control plane); data plane anonymous |
 | Object mapping | ModelMapper |
 | Boilerplate | Lombok |
 | API docs | springdoc-openapi (Swagger UI) |
@@ -50,25 +50,38 @@ I/O on the render path, sticky across restarts with zero storage. See `design.md
 ## Prerequisites
 
 - **JDK 25**
-- **MySQL**, **Redis**, and **Kafka** reachable (connection details via
-  environment — see [`.env.example`](./.env.example)). Each is required only once
-  its corresponding feature is wired.
+- **MySQL**, **Redis**, and **RabbitMQ** reachable. The Compose stack under
+  [`infra`](./infra) supplies all three; secrets are documented in
+  [`.env.example`](./.env.example).
 
 ## Build & run
 
 The Maven wrapper is included — no local Maven install needed.
 
+Because this is a multi-module build and **only the `web` module is executable**, run
+the app in two steps — install the library modules to your local repo, then start
+`web`. (`spring-boot:run` across the whole reactor fails: the other modules have no
+main class.) The app resolves its secrets from the environment, so make the `.env`
+values available first (in Git Bash / macOS / Linux: `set -a; source .env; set +a`).
+
 ```bash
 # Windows
-mvnw.cmd clean verify                    # build the whole reactor (compile + test + package)
-mvnw.cmd -pl web -am spring-boot:run     # run the app (web module bootstraps the rest)
+mvnw.cmd clean verify                 # full reactor build: compile + test + package
+mvnw.cmd install -DskipTests          # install all modules to the local repo (fast, no tests)
+mvnw.cmd -pl web spring-boot:run      # run the app (web module only)
 
 # macOS / Linux
 ./mvnw clean verify
-./mvnw -pl web -am spring-boot:run
+./mvnw install -DskipTests
+./mvnw -pl web spring-boot:run
 ```
 
+Testing commands, environment setup, coverage, expected counts, and troubleshooting are in
+[`TESTING.md`](./TESTING.md). The normal build is unit-focused; the opt-in Playwright profile exercises
+the live HTTP API and local infrastructure.
+
 Once running:
+- Admin UI (needs the nginx stack on port 80): `http://localhost/demo/login`
 - API docs (Swagger UI): `http://localhost:8080/swagger-ui.html`
 - Health: `http://localhost:8080/actuator/health`
 
@@ -84,10 +97,10 @@ Multi-module Maven build; the split follows the plane boundary (`design.md` §2)
 ```
 demo (parent)
 ├── data/       shared persistence + domain — entities, tenant-scoped repos, request
-│               context, MySQL/Redis/Kafka config       (both planes depend on it)
+│               context and MySQL/Redis persistence      (both planes depend on it)
 ├── visitor/    data plane — /{tenant}/v1/assign, /{tenant}/v1/track, strategies
 │               (hash | swrr), identity, rate limiting          (depends on data)
-├── admin/      control plane — experiment config, results, RBAC (depends on data)
+├── admin/      control plane — experiment config and results (depends on data)
 └── web/        runnable app — DemoApplication, OAuth + JWT, filter wiring
                 (depends on admin + visitor; the only executable jar)
 ```
@@ -105,5 +118,5 @@ tooling used on this project.
 
 ---
 
-Company-neutral by design: no third-party product or company name appears anywhere
-in the code, commits, or documentation.
+Company-neutral by design: no assignment-company or assignment-product name appears
+in the code or documentation.

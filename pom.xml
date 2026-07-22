@@ -30,11 +30,22 @@
 
 	<properties>
 		<java.version>25</java.version>
+		<guava.version>33.5.0-jre</guava.version>
+		<modelmapper.version>3.2.4</modelmapper.version>
+		<playwright.version>1.60.0</playwright.version>
 		<springdoc.version>3.0.2</springdoc.version>
+		<spring-cloud.version>2025.1.2</spring-cloud.version>
 	</properties>
 
 	<dependencyManagement>
 		<dependencies>
+			<dependency>
+				<groupId>org.springframework.cloud</groupId>
+				<artifactId>spring-cloud-dependencies</artifactId>
+				<version>${spring-cloud.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
 			<!-- internal modules — version aligned to the reactor -->
 			<dependency>
 				<groupId>ai.visitorflow</groupId>
@@ -56,6 +67,21 @@
 				<groupId>org.springdoc</groupId>
 				<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
 				<version>${springdoc.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.google.guava</groupId>
+				<artifactId>guava</artifactId>
+				<version>${guava.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.modelmapper</groupId>
+				<artifactId>modelmapper</artifactId>
+				<version>${modelmapper.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.microsoft.playwright</groupId>
+				<artifactId>playwright</artifactId>
+				<version>${playwright.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>

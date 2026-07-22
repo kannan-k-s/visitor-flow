@@ -1,0 +1,11 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/001-tenants-users.yaml
+  - include:
+      file: db/changelog/002-experiments-variants.yaml
+  - include:
+      file: db/changelog/003-visitors-identity-links.yaml
+  - include:
+      file: db/changelog/004-events.yaml
+  - include:
+      file: db/changelog/005-seed-demo.yaml
