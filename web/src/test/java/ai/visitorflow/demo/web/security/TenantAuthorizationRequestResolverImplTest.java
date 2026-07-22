@@ -2,6 +2,7 @@ package ai.visitorflow.demo.web.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -17,7 +18,7 @@ class TenantAuthorizationRequestResolverImplTest {
   void putsTenantOnlyInSignedState() {
     JwtService jwtService = new StubJwtService();
     TenantAuthorizationRequestResolver resolver = new TenantAuthorizationRequestResolverImpl(
-      new InMemoryClientRegistrationRepository(List.of(google())), jwtService
+      new InMemoryClientRegistrationRepository(List.of(google())), jwtService, securityProperties(false)
     );
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/demo/v1/auth/login");
     request.setScheme("http");
@@ -28,10 +29,36 @@ class TenantAuthorizationRequestResolverImplTest {
     OAuth2AuthorizationRequest authorizationRequest = resolver.resolve(request);
 
     assertThat(authorizationRequest.getState()).isEqualTo("signed-state-for-demo");
+    assertThat(authorizationRequest.getRedirectUri()).startsWith("http://");
     var query = UriComponentsBuilder.fromUriString(authorizationRequest.getAuthorizationRequestUri())
       .build().getQueryParams();
     assertThat(query).doesNotContainKey("tenant");
     assertThat(query.getFirst("state")).isEqualTo("signed-state-for-demo");
+  }
+
+  @Test
+  void forcesHttpsRedirectUriWhenServedOverHttps() {
+    TenantAuthorizationRequestResolver resolver = new TenantAuthorizationRequestResolverImpl(
+      new InMemoryClientRegistrationRepository(List.of(google())), new StubJwtService(),
+      securityProperties(true)
+    );
+    MockHttpServletRequest request = new MockHttpServletRequest("GET", "/demo/v1/auth/login");
+    request.setScheme("http");                 // TLS terminated at the proxy, so the app sees http
+    request.setServerName("app.example.com");
+    request.setServerPort(80);
+    request.setAttribute(TenantAuthorizationRequestResolver.TENANT_ATTRIBUTE, "demo");
+
+    OAuth2AuthorizationRequest authorizationRequest = resolver.resolve(request);
+
+    assertThat(authorizationRequest.getRedirectUri())
+      .isEqualTo("https://app.example.com/login/oauth2/code/google");
+    assertThat(authorizationRequest.getState()).isEqualTo("signed-state-for-demo");
+  }
+
+  private SecurityProperties securityProperties(boolean cookieSecure) {
+    return new SecurityProperties(
+      Duration.ofMinutes(30), Duration.ofMinutes(5), "secret", "session", cookieSecure
+    );
   }
 
   private ClientRegistration google() {
