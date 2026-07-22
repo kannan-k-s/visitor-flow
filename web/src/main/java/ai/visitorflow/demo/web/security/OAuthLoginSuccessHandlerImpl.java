@@ -48,7 +48,19 @@ class OAuthLoginSuccessHandlerImpl implements OAuthLoginSuccessHandler {
     if (request.getSession(false) != null) {
       request.getSession(false).invalidate();
     }
-    response.sendRedirect("/" + tenantName + "/experiments");
+    response.sendRedirect(postLoginLocation(request, tenantName));
+  }
+
+  private String postLoginLocation(HttpServletRequest request, String tenantName) {
+    String path = "/" + tenantName + "/experiments";
+    // Behind a TLS-terminating proxy the request looks like http on the forwarded port,
+    // so a relative redirect expands to an invalid absolute URL (e.g. http://host:443/...).
+    // Where cookies are secure the public origin is https, so emit an absolute https URL
+    // (default 443, no explicit port); dev keeps the relative path (scheme/host/port intact).
+    if (properties.cookieSecure()) {
+      return "https://" + request.getServerName() + path;
+    }
+    return path;
   }
 
   private void addCookie(HttpServletResponse response, String name, String value, Duration maxAge) {
